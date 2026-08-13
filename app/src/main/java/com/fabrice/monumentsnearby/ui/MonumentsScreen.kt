@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,7 +32,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,12 +58,29 @@ fun MonumentsScreen(
     val speaker = remember { GuideSpeaker(context) }
     DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
 
+    var showMap by remember { mutableStateOf(false) }
+    var showVoiceDialog by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Monuments à proximité") },
                 actions = {
-                    TextButton(onClick = onLocate) { Text("🔄", style = MaterialTheme.typography.titleLarge) }
+                    // Bascule liste ↔ carte
+                    TextButton(onClick = { showMap = !showMap }) {
+                        Text(
+                            text = if (showMap) "📋" else "🗺️",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
+                    // Choix de la voix de l'audioguide
+                    TextButton(onClick = { showVoiceDialog = true }) {
+                        Text("🔊", style = MaterialTheme.typography.titleLarge)
+                    }
+                    // Re-localiser
+                    TextButton(onClick = onLocate) {
+                        Text("🔄", style = MaterialTheme.typography.titleLarge)
+                    }
                 }
             )
         }
@@ -90,6 +113,12 @@ fun MonumentsScreen(
                         CenteredMessage("Aucun monument historique trouvé dans un rayon de 3 km. Essaie en ville !") {
                             Button(onClick = onLocate) { Text("🔄 Re-localiser") }
                         }
+                    } else if (showMap) {
+                        MonumentsMap(
+                            monuments = state.monuments,
+                            centerLat = state.lat,
+                            centerLon = state.lon
+                        )
                     } else {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
@@ -115,6 +144,41 @@ fun MonumentsScreen(
             }
         }
     }
+
+    if (showVoiceDialog) {
+        VoiceDialog(speaker = speaker, onDismiss = { showVoiceDialog = false })
+    }
+}
+
+@Composable
+private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
+    val voices = speaker.voices
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Voix de l'audioguide") },
+        text = {
+            if (voices.isEmpty()) {
+                Text("Aucune voix disponible sur cet appareil.")
+            } else {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    voices.forEach { voice ->
+                        TextButton(
+                            onClick = {
+                                speaker.setVoice(voice.name)
+                                onDismiss()
+                            }
+                        ) {
+                            Text(voice.name)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
+        }
+    )
 }
 
 @Composable

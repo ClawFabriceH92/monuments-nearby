@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-48:/values-hr/values-hr.xml",
+            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-49:/values-hr/values-hr.xml",
             "map": [
                 {
                     "source": "/root/.gradle/caches/8.9/transforms/bc70cb2999d7021409f8d12e6fdcc0b2/transformed/play-services-basement-18.4.0/res/values-hr/values.xml",

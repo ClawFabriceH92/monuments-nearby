@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-48:/values-iw/values-iw.xml",
+            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-49:/values-iw/values-iw.xml",
             "map": [
                 {
                     "source": "/root/.gradle/caches/8.9/transforms/ad8eea050f53ebc62f7f4a016af601f1/transformed/foundation-release/res/values-iw/values-iw.xml",

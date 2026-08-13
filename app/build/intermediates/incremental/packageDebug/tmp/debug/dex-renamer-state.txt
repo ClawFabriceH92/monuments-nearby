@@ -1,4 +1,4 @@
-#Thu Aug 13 16:29:20 CEST 2026
+#Thu Aug 13 16:38:29 CEST 2026
 base.0=/root/projects/monuments-nearby/app/build/intermediates/dex/debug/mergeExtDexDebug/classes.dex
 base.1=/root/projects/monuments-nearby/app/build/intermediates/dex/debug/mergeProjectDexDebug/0/classes.dex
 base.2=/root/projects/monuments-nearby/app/build/intermediates/dex/debug/mergeProjectDexDebug/1/classes.dex

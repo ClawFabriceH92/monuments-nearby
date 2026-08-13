@@ -21,10 +21,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Android SDK 35
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-35, build-tools;35.0.0'
+      - name: Install Android SDK 35
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.1"
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon

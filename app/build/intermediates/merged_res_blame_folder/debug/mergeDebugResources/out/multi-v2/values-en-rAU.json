@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-48:/values-en-rAU/values-en-rAU.xml",
+            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-49:/values-en-rAU/values-en-rAU.xml",
             "map": [
                 {
                     "source": "/root/.gradle/caches/8.9/transforms/cca0cc3e8911fcf4cb5d95a8f2af57dc/transformed/ui-release/res/values-en-rAU/values-en-rAU.xml",

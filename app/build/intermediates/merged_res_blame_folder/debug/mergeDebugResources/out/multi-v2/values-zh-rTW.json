@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-48:/values-zh-rTW/values-zh-rTW.xml",
+            "outputFile": "com.fabrice.monumentsnearby.app-mergeDebugResources-49:/values-zh-rTW/values-zh-rTW.xml",
             "map": [
                 {
                     "source": "/root/.gradle/caches/8.9/transforms/4e33393ccd50e436196a610806166eca/transformed/play-services-base-18.5.0/res/values-zh-rTW/values.xml",

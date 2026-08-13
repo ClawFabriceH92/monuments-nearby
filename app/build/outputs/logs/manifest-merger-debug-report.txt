@@ -67,6 +67,7 @@ MERGED from [androidx.startup:startup-runtime:1.1.1] /root/.gradle/caches/8.9/tr
 MERGED from [androidx.tracing:tracing:1.0.0] /root/.gradle/caches/8.9/transforms/63f6b5eee6dc289032441efb8395b1fc/transformed/tracing-1.0.0/AndroidManifest.xml:17:1-24:12
 MERGED from [androidx.arch.core:core-runtime:2.2.0] /root/.gradle/caches/8.9/transforms/17c2f6b23cd913db5ea64278319b9c14/transformed/core-runtime-2.2.0/AndroidManifest.xml:17:1-22:12
 MERGED from [androidx.exifinterface:exifinterface:1.3.7] /root/.gradle/caches/8.9/transforms/2a65cd4f9fda93934a7e7befa7195444/transformed/exifinterface-1.3.7/AndroidManifest.xml:17:1-24:12
+MERGED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:2:1-27:12
 	package
 		INJECTED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml
 	android:versionName
@@ -89,6 +90,8 @@ ADDED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml:6:5-
 		ADDED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml:6:22-76
 uses-feature#android.hardware.location.gps
 ADDED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml:9:5-11:36
+MERGED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:17:5-19:36
+MERGED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:17:5-19:36
 	android:required
 		ADDED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml:11:9-33
 	android:name
@@ -276,6 +279,8 @@ MERGED from [androidx.arch.core:core-runtime:2.2.0] /root/.gradle/caches/8.9/tra
 MERGED from [androidx.arch.core:core-runtime:2.2.0] /root/.gradle/caches/8.9/transforms/17c2f6b23cd913db5ea64278319b9c14/transformed/core-runtime-2.2.0/AndroidManifest.xml:20:5-44
 MERGED from [androidx.exifinterface:exifinterface:1.3.7] /root/.gradle/caches/8.9/transforms/2a65cd4f9fda93934a7e7befa7195444/transformed/exifinterface-1.3.7/AndroidManifest.xml:20:5-22:41
 MERGED from [androidx.exifinterface:exifinterface:1.3.7] /root/.gradle/caches/8.9/transforms/2a65cd4f9fda93934a7e7befa7195444/transformed/exifinterface-1.3.7/AndroidManifest.xml:20:5-22:41
+MERGED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:5:5-7:41
+MERGED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:5:5-7:41
 	android:targetSdkVersion
 		INJECTED from /root/projects/monuments-nearby/app/src/main/AndroidManifest.xml
 	android:minSdkVersion
@@ -384,3 +389,29 @@ action#androidx.profileinstaller.action.BENCHMARK_OPERATION
 ADDED from [androidx.profileinstaller:profileinstaller:1.3.1] /root/.gradle/caches/8.9/transforms/4d07dd122260385b5a0f7c79a656e780/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:17-95
 	android:name
 		ADDED from [androidx.profileinstaller:profileinstaller:1.3.1] /root/.gradle/caches/8.9/transforms/4d07dd122260385b5a0f7c79a656e780/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:25-92
+supports-screens
+ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:9:5-12:40
+	android:largeScreens
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:11:9-36
+	android:normalScreens
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:12:9-37
+	android:anyDensity
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:10:9-34
+uses-feature#android.hardware.location.network
+ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:14:5-16:36
+	android:required
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:16:9-33
+	android:name
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:15:9-57
+uses-feature#android.hardware.telephony
+ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:20:5-22:36
+	android:required
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:22:9-33
+	android:name
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:21:9-50
+uses-feature#android.hardware.wifi
+ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:23:5-25:36
+	android:required
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:25:9-33
+	android:name
+		ADDED from [org.osmdroid:osmdroid-android:6.1.18] /root/.gradle/caches/8.9/transforms/7696a4de4c17a964acd76f549a737bb8/transformed/osmdroid-android-6.1.18/AndroidManifest.xml:24:9-45
