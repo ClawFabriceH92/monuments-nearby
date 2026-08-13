@@ -4,20 +4,34 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Pin de localisation : halo bleu clair + marqueur blanc + point central -->
+    <!-- Petit temple grec stylisé : fronton, architrave, 4 colonnes, base -->
 
-    <!-- Halo circulaire derrière le pin -->
-    <path
-        android:fillColor="#1E5AA8"
-        android:pathData="M54,22 a18,18 0 1 0 0,36 a18,18 0 1 0 0,-36 Z" />
-
-    <!-- Pin (marqueur de carte) -->
+    <!-- Fronton (toit triangulaire) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,24 C46.5,24 40,30.5 40,38 C40,47.5 54,60 54,60 C54,60 68,47.5 68,38 C68,30.5 61.5,24 54,24 Z" />
+        android:pathData="M54,22 L34,46 L74,46 Z" />
 
-    <!-- Point central (couleur du fond → effet marqueur) -->
+    <!-- Architrave (poutre sous le fronton) -->
     <path
-        android:fillColor="#0E2A47"
-        android:pathData="M54,31.5 a6.5,6.5 0 1 0 0,13 a6.5,6.5 0 1 0 0,-13 Z" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,46 L74,46 L74,53 L34,53 Z" />
+
+    <!-- Colonnes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M37,53 L41,53 L41,72 L37,72 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,53 L52,53 L52,72 L48,72 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,53 L60,53 L60,72 L56,72 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,53 L71,53 L71,72 L67,72 Z" />
+
+    <!-- Base (stéréobate) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,74 L76,74 L76,81 L32,81 Z" />
 </vector>
