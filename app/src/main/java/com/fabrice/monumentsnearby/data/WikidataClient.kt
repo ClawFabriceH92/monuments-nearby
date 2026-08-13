@@ -48,7 +48,7 @@ object WikidataClient {
                     val entity = entities[qid] ?: return@map m
                     enrichOne(m, entity, typeLabels)
                 }
-                deduplicate(enriched)
+                deduplicate(enriched).map { it.copy(important = isMajor(it)) }
             }
         } catch (e: Exception) {
             monuments // enrichissement non bloquant
@@ -71,11 +71,31 @@ object WikidataClient {
         return best.values.sortedBy { it.distanceM }
     }
 
+    /**
+     * Un monument est "majeur" s'il a un article Wikipédia dédié (proxy de
+     * notoriété) ou si son type est un monument d'importance (château, église…).
+     */
+    private val MAJOR_KINDS = setOf(
+        // tags OSM
+        "monument", "castle", "church", "cathedral", "abbey", "monastery", "convent",
+        "palace", "manor", "museum", "ruins", "archaeological_site", "fort", "tower",
+        "city_gate", "temple", "mill", "bridge", "battlefield",
+        // labels Wikidata (FR)
+        "château", "église", "cathédrale", "abbaye", "monastère", "palais", "musée",
+        "ruines", "site archéologique", "fort", "tour", "temple", "moulin", "pont",
+        "manoir", "hôtel particulier", "basilique", "chapelle", "champ de bataille"
+    )
+
+    private fun isMajor(m: Monument): Boolean {
+        if (!m.wikipediaTitle.isNullOrBlank()) return true
+        return MAJOR_KINDS.contains(m.kind.lowercase())
+    }
+
     private suspend fun fetchEntities(ids: List<String>): Map<String, JSONObject> {
         val result = mutableMapOf<String, JSONObject>()
         for (chunk in ids.chunked(MAX_IDS)) {
             val url = "$BASE?action=wbgetentities&ids=${chunk.joinToString("|")}" +
-                    "&props=labels|descriptions|claims&languages=fr&format=json"
+                    "&props=labels|descriptions|claims|sitelinks&languages=fr&format=json"
             val root = getJson(url)
             val entities = root.optJSONObject("entities") ?: continue
             val keys = entities.keys()
@@ -125,6 +145,13 @@ object WikidataClient {
 
         val label = labels?.optJSONObject("fr")?.optString("value")
         val desc = descriptions?.optJSONObject("fr")?.optString("value")
+
+        // Fallback : titre Wikipédia depuis le sitelink frwiki de Wikidata
+        var wikiTitle = m.wikipediaTitle
+        if (wikiTitle.isNullOrBlank()) {
+            entity.optJSONObject("sitelinks")?.optJSONObject("frwiki")?.optString("title")
+                ?.takeIf { it.isNotBlank() }?.let { wikiTitle = it }
+        }
 
         // Type ontologique : premier P31 résolu en label FR
         var typeLabel: String? = null
@@ -181,7 +208,8 @@ object WikidataClient {
             kind = typeLabel ?: m.kind,
             description = desc ?: m.description,
             imageUrl = imageUrl ?: m.imageUrl,
-            inception = inception
+            inception = inception,
+            wikipediaTitle = wikiTitle ?: m.wikipediaTitle
         )
     }
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.OverpassClient
 import com.fabrice.monumentsnearby.data.WikidataClient
+import com.fabrice.monumentsnearby.data.WikipediaClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -26,7 +27,8 @@ class MonumentsViewModel : ViewModel() {
         viewModelScope.launch {
             _state.value = try {
                 val raw = OverpassClient.fetchMonuments(lat, lon)
-                val enriched = WikidataClient.enrich(raw) // non bloquant si échec
+                var enriched = WikidataClient.enrich(raw) // ontologie + types + photos
+                enriched = WikipediaClient.enrich(enriched) // résumés d'articles
                 UiState.Success(enriched, lat, lon)
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")

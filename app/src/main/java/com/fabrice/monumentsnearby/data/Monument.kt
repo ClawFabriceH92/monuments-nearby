@@ -18,5 +18,7 @@ data class Monument(
     val imageUrl: String? = null,
     val wikidataId: String? = null,
     val wikipediaTitle: String? = null,
-    val inception: String? = null
+    val inception: String? = null,
+    /** true si monument majeur (article Wikipédia dédié ou type important). */
+    val important: Boolean = false
 )

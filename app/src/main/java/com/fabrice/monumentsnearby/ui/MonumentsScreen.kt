@@ -120,6 +120,8 @@ fun MonumentsScreen(
                             centerLon = state.lon
                         )
                     } else {
+                        val majors = state.monuments.filter { it.important }
+                        val others = state.monuments.filter { !it.important }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(12.dp),
@@ -131,12 +133,25 @@ fun MonumentsScreen(
                                     style = MaterialTheme.typography.labelMedium
                                 )
                             }
-                            items(state.monuments, key = { it.id }) { monument ->
-                                MonumentCard(
-                                    monument = monument,
-                                    onListen = { speaker.speak(guideText(monument)) },
-                                    onNavigate = { openMaps(context, monument) }
-                                )
+                            if (majors.isNotEmpty()) {
+                                item { SectionHeader("⭐ Monuments majeurs") }
+                                items(majors, key = { it.id }) { monument ->
+                                    MonumentCard(
+                                        monument = monument,
+                                        onListen = { speaker.speak(guideText(monument)) },
+                                        onNavigate = { openMaps(context, monument) }
+                                    )
+                                }
+                            }
+                            if (others.isNotEmpty()) {
+                                item { SectionHeader("Autres monuments") }
+                                items(others, key = { it.id }) { monument ->
+                                    MonumentCard(
+                                        monument = monument,
+                                        onListen = { speaker.speak(guideText(monument)) },
+                                        onNavigate = { openMaps(context, monument) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -178,6 +193,16 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Fermer") }
         }
+    )
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
     )
 }
 
