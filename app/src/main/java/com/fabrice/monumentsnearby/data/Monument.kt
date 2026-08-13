@@ -19,6 +19,8 @@ data class Monument(
     val wikidataId: String? = null,
     val wikipediaTitle: String? = null,
     val inception: String? = null,
+    /** Artiste (œuvres de musée, P170 Wikidata). */
+    val artist: String? = null,
     /** true si monument majeur (article Wikipédia dédié ou type important). */
     val important: Boolean = false
 )

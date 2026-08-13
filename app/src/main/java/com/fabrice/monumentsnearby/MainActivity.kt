@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 MonumentsScreen(
                     state = state,
+                    viewModel = viewModel,
                     onLocate = { locateAndLoad() }
                 )
             }

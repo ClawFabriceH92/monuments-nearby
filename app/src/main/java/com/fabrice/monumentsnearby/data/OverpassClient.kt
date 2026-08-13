@@ -46,8 +46,28 @@ object OverpassClient {
      * @throws Exception si tous les miroirs échouent
      */
     suspend fun fetchMonuments(lat: Double, lon: Double, radiusM: Int = DEFAULT_RADIUS_M): List<Monument> =
+        fetch(buildQuery(lat, lon, radiusM), lat, lon)
+
+    /**
+     * Musées autour d'une position (tag tourism=museum uniquement).
+     * Utilisé par le mode Musée « musées par ville » (rayon élargi).
+     */
+    suspend fun fetchMuseums(lat: Double, lon: Double, radiusM: Int = 12000): List<Monument> =
+        fetch(
+            """
+            [out:json][timeout:25];
+            (
+              node["tourism"="museum"](around:$radiusM,$lat,$lon);
+              way["tourism"="museum"](around:$radiusM,$lat,$lon);
+            );
+            out center tags 300;
+            """.trimIndent(),
+            lat, lon
+        )
+
+    /** Exécute une requête Overpass sur les miroirs, puis parse. */
+    private suspend fun fetch(query: String, lat: Double, lon: Double): List<Monument> =
         withContext(Dispatchers.IO) {
-            val query = buildQuery(lat, lon, radiusM)
             val body = ("data=" + URLEncoder.encode(query, "UTF-8"))
                 .toRequestBody("application/x-www-form-urlencoded".toMediaType())
 

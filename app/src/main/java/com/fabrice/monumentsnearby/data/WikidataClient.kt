@@ -220,4 +220,139 @@ object WikidataClient {
             return JSONObject(resp.body!!.string())
         }
     }
+
+    // ---------------------------------------------------------------
+    // Mode Musée — recherche d'un musée + œuvres de sa collection
+    // ---------------------------------------------------------------
+
+    /** Un musée (résultat de recherche ou d'une ville). */
+    data class Museum(
+        val qid: String,
+        val name: String,
+        val description: String? = null,
+        val imageUrl: String? = null,
+        val lat: Double? = null,
+        val lon: Double? = null
+    )
+
+    /** QID du type « musée ». */
+    private const val Q_MUSEUM = "Q33506"
+
+    /**
+     * Recherche un musée par nom (wbsearchentities), filtré sur le type
+     * « musée » (P31 = Q33506). Idéal pour la barre de recherche.
+     */
+    suspend fun searchMuseums(query: String, limit: Int = 8): List<Museum> =
+        withContext(Dispatchers.IO) {
+            if (query.isBlank()) return@withContext emptyList()
+            val url = "$BASE?action=wbsearchentities&search=${URLEncoder.encode(query, "UTF-8")}" +
+                    "&language=fr&uselang=fr&type=item&limit=$limit&format=json"
+            val root = getJson(url)
+            val results = root.optJSONArray("search") ?: return@withContext emptyList()
+
+            val ids = mutableListOf<String>()
+            val pending = mutableListOf<Museum>()
+            for (i in 0 until results.length()) {
+                val r = results.getJSONObject(i)
+                val id = r.optString("id")
+                if (id.isBlank()) continue
+                ids.add(id)
+                pending += Museum(
+                    qid = id,
+                    name = r.optString("label").takeIf { it.isNotBlank() } ?: id,
+                    description = r.optString("description").takeIf { it.isNotBlank() }
+                )
+            }
+            if (ids.isEmpty()) return@withContext emptyList()
+
+            // Filtrer : garder uniquement les entités de type « musée »
+            val entities = fetchEntities(ids)
+            pending.filter { isMuseumType(entities[it.qid]) }
+        }
+
+    private fun isMuseumType(entity: JSONObject?): Boolean {
+        if (entity == null) return false
+        val p31 = entity.optJSONObject("claims")?.optJSONArray("P31") ?: return false
+        for (i in 0 until p31.length()) {
+            val value = p31.getJSONObject(i).optJSONObject("mainsnak")
+                ?.optJSONObject("datavalue")?.optJSONObject("value")
+            if (value?.optString("id") == Q_MUSEUM) return true
+        }
+        return false
+    }
+
+    /**
+     * Œuvres de la collection d'un musée (SPARQL, propriété P195 = collection).
+     * Ne garde que les œuvres avec image Wikimedia Commons, triées par notoriété
+     * de l'image, limitées pour rester réactif sur mobile.
+     */
+    suspend fun fetchMuseumArtworks(qid: String, limit: Int = 100): List<Monument> =
+        withContext(Dispatchers.IO) {
+            val sparql = """
+                SELECT ?work ?workLabel ?artistLabel ?date ?image ?typeLabel ?wikiTitle WHERE {
+                  ?work wdt:P195 wd:$qid .
+                  ?work wdt:P18 ?image .
+                  OPTIONAL { ?work wdt:P170 ?artist . }
+                  OPTIONAL { ?work wdt:P571 ?date . }
+                  OPTIONAL { ?work wdt:P31 ?type . }
+                  OPTIONAL {
+                    ?work schema:about ?wiki .
+                    ?wiki schema:isPartOf <https://fr.wikipedia.org/> ; schema:name ?wikiTitle .
+                  }
+                  SERVICE wikibase:label { bd:serviceParam wikibase:language "fr". }
+                } ORDER BY DESC(?image) LIMIT $limit
+            """.trimIndent()
+            val url = "https://query.wikidata.org/sparql?query=" +
+                    URLEncoder.encode(sparql, "UTF-8") + "&format=json"
+            val root = getJson(url)
+            val bindings = root.optJSONObject("results")?.optJSONArray("bindings")
+                ?: return@withContext emptyList()
+
+            val seen = LinkedHashMap<String, Monument>()
+            for (i in 0 until bindings.length()) {
+                val b = bindings.getJSONObject(i)
+                val workId = b.optJSONObject("work")?.optString("value")?.substringAfterLast('/')
+                    ?: continue
+                val name = b.optJSONObject("workLabel")?.optString("value")
+                    ?.takeIf { it.isNotBlank() } ?: workId
+                val artist = b.optJSONObject("artistLabel")?.optString("value")
+                    ?.takeIf { it.isNotBlank() }
+                val type = b.optJSONObject("typeLabel")?.optString("value")
+                    ?.takeIf { it.isNotBlank() }
+                val wikiTitle = b.optJSONObject("wikiTitle")?.optString("value")
+                    ?.takeIf { it.isNotBlank() }
+                val image = b.optJSONObject("image")?.optString("value")
+                    ?.takeIf { it.isNotBlank() } ?: continue
+                val candidate = Monument(
+                    id = workId,
+                    name = name,
+                    lat = 0.0,
+                    lon = 0.0,
+                    distanceM = 0.0,
+                    kind = type ?: "œuvre",
+                    imageUrl = image
+                        .replace("http://", "https://")
+                        .let { if ('?' in it) it else "$it?width=400" },
+                    wikidataId = workId,
+                    wikipediaTitle = wikiTitle,
+                    inception = parseYear(b.optJSONObject("date")?.optString("value")),
+                    artist = artist
+                )
+                // Une œuvre peut apparaître plusieurs fois (plusieurs types P31) →
+                // garder la première occurrence, ou celle qui a un article Wikipédia.
+                val existing = seen[workId]
+                if (existing == null ||
+                    (existing.wikipediaTitle.isNullOrBlank() && !wikiTitle.isNullOrBlank())) {
+                    seen[workId] = candidate
+                }
+            }
+            seen.values.toList()
+        }
+
+    /** "+1661-00-00T00:00:00Z" → "1661" (année seule). */
+    private fun parseYear(time: String?): String? {
+        if (time.isNullOrBlank()) return null
+        val year = time.trimStart('+').takeWhile { it != '-' }
+        return year.takeIf { it.isNotBlank() }
+    }
 }
