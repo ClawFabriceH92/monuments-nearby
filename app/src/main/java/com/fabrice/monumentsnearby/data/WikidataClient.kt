@@ -109,8 +109,9 @@ object WikidataClient {
 
     private suspend fun fetchTypeLabels(entities: Map<String, JSONObject>): Map<String, String> {
         val typeIds = LinkedHashSet<String>()
-        // P31 = type, P84 = architecte, P149 = style, P186 = matériau, P1435 = classement
-        val props = listOf("P31", "P84", "P149", "P186", "P1435")
+        // P31 = type, P84 = architecte, P149 = style, P186 = matériau,
+        // P1435 = classement, P112 = fondateur, P127 = propriétaire
+        val props = listOf("P31", "P84", "P149", "P186", "P1435", "P112", "P127")
         for (entity in entities.values) {
             for (prop in props) {
                 val arr = entity.optJSONObject("claims")?.optJSONArray(prop) ?: continue
@@ -226,6 +227,22 @@ object WikidataClient {
         val style = firstItemLabel(claims, "P149", typeLabels)
         val material = firstItemLabel(claims, "P186", typeLabels)
         val heritage = firstItemLabel(claims, "P1435", typeLabels)
+        val founder = firstItemLabel(claims, "P112", typeLabels)
+        val owner = firstItemLabel(claims, "P127", typeLabels)
+
+        // Site web officiel (P856) — valeur string (URL)
+        var website: String? = null
+        val p856 = claims?.optJSONArray("P856")
+        if (p856 != null) {
+            for (i in 0 until p856.length()) {
+                val url = p856.getJSONObject(i).optJSONObject("mainsnak")
+                    ?.optJSONObject("datavalue")?.optString("value")
+                if (!url.isNullOrBlank()) {
+                    website = url
+                    break
+                }
+            }
+        }
 
         return m.copy(
             name = label ?: m.name,
@@ -238,6 +255,9 @@ object WikidataClient {
             style = style,
             material = material,
             heritage = heritage,
+            founder = founder,
+            owner = owner,
+            website = website,
             wikipediaTitle = wikiTitle ?: m.wikipediaTitle
         )
     }

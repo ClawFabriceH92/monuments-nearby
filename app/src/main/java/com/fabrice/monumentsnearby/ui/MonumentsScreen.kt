@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -58,11 +60,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import kotlin.math.roundToInt
 
-enum class AppTab { AROUND, MUSEUMS, CITY }
+enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,6 +86,8 @@ fun MonumentsScreen(
     val speakerActive = remember { mutableStateOf(false) }
     var selectedMuseum by remember { mutableStateOf<WikidataClient.Museum?>(null) }
     var showMuseumSearch by remember { mutableStateOf(true) }
+    var showCamera by remember { mutableStateOf(false) }
+    var cameraState by remember { mutableStateOf<UiState.Success?>(null) }
 
     var lastTitle by remember { mutableStateOf("Monuments à proximité") }
     val success = state as? UiState.Success
@@ -138,6 +143,19 @@ fun MonumentsScreen(
                 }
             }
         )
+    } else if (showCamera) {
+        cameraState?.let { cam ->
+            CameraScreen(
+                monuments = cam.monuments,
+                lat = cam.lat,
+                lon = cam.lon,
+                onClose = { showCamera = false },
+                onQrFound = { qid ->
+                    cam.monuments.find { it.wikidataId == qid }?.let { selectedMonument = it }
+                    showCamera = false
+                }
+            )
+        }
     } else {
         Scaffold(
             topBar = {
@@ -148,10 +166,16 @@ fun MonumentsScreen(
                                 AppTab.AROUND -> lastTitle
                                 AppTab.MUSEUMS -> if (selectedMuseum != null) selectedMuseum!!.name else "Musées"
                                 AppTab.CITY -> "Ville"
+                                AppTab.BOOK -> "Carnet"
                             }
                         )
                     },
                     actions = {
+                        // Alerte monuments à proximité (géofencing)
+                        val geofencesActive by viewModel.geofencesActive.collectAsStateWithLifecycle()
+                        TextButton(onClick = { viewModel.toggleGeofences() }) {
+                            Text(if (geofencesActive) "🔔" else "🔕")
+                        }
                         // Réglages de l'audioguide (voix + vitesse)
                         TextButton(onClick = { showVoiceDialog = true }) {
                             Text("⚙️")
@@ -188,6 +212,12 @@ fun MonumentsScreen(
                             icon = { Text("🏙") },
                             label = { Text("Ville") }
                         )
+                        NavigationBarItem(
+                            selected = selectedTab == AppTab.BOOK,
+                            onClick = { selectedTab = AppTab.BOOK },
+                            icon = { Text("📒") },
+                            label = { Text("Carnet") }
+                        )
                     }
                 }
             },
@@ -223,7 +253,16 @@ fun MonumentsScreen(
                         showMap = showMap,
                         onToggleMap = { showMap = !showMap },
                         onSelectMonument = { selectedMonument = it },
-                        onLocate = onLocate
+                        onLocate = onLocate,
+                        onOpenCamera = {
+                            val s = (state as? UiState.Success)
+                                ?.takeIf { it.mode == AppMode.MONUMENTS }
+                                ?: viewModel.lastMonuments.value
+                            if (s != null) {
+                                cameraState = s
+                                showCamera = true
+                            }
+                        }
                     )
                     AppTab.MUSEUMS -> MuseumContent(
                         state = state,
@@ -244,6 +283,15 @@ fun MonumentsScreen(
                     )
                     AppTab.CITY -> CityContent(
                         state = state,
+                        viewModel = viewModel,
+                        onSelectMonument = { selectedMonument = it },
+                        onListen = {
+                            speakerActive.value = true
+                            speaker.speak(guideText(it))
+                        },
+                        onNavigate = { openMaps(context, it) }
+                    )
+                    AppTab.BOOK -> BookContent(
                         viewModel = viewModel,
                         onSelectMonument = { selectedMonument = it },
                         onListen = {
@@ -291,6 +339,34 @@ private fun LectureBar(
     }
 }
 
+/**
+ * Pastilles de filtre par catégorie de monument.
+ */
+@Composable
+private fun FilterBar(selected: String?, onSelect: (String?) -> Unit) {
+    val categories = listOf("musée", "religieux", "château", "ruines", "monument", "autre")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        FilterChip(
+            selected = selected == null,
+            onClick = { onSelect(null) },
+            label = { Text("Tous") }
+        )
+        categories.forEach { cat ->
+            FilterChip(
+                selected = selected == cat,
+                onClick = { onSelect(if (selected == cat) null else cat) },
+                label = { Text(cat.replaceFirstChar { it.uppercase() }) }
+            )
+        }
+    }
+}
+
 @Composable
 private fun AroundContent(
     state: UiState,
@@ -301,7 +377,8 @@ private fun AroundContent(
     showMap: Boolean,
     onToggleMap: () -> Unit,
     onSelectMonument: (Monument) -> Unit,
-    onLocate: () -> Unit
+    onLocate: () -> Unit,
+    onOpenCamera: () -> Unit
 ) {
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
@@ -310,6 +387,8 @@ private fun AroundContent(
             if (state.mode == AppMode.MONUMENTS) state else lastMonuments
         else -> null
     }
+    var filter by remember { mutableStateOf<String?>(null) }
+    var showWalk by remember { mutableStateOf(false) }
 
     when {
         effective != null -> {
@@ -324,13 +403,18 @@ private fun AroundContent(
                     centerLon = effective.lon
                 )
             } else {
-                val majors = effective.monuments.filter { it.important }
-                val others = effective.monuments.filter { !it.important }
+                val visible = if (filter == null) effective.monuments
+                else effective.monuments.filter { it.category() == filter }
+                val majors = visible.filter { it.important }
+                val others = visible.filter { !it.important }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    item {
+                        FilterBar(selected = filter, onSelect = { filter = it })
+                    }
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -338,11 +422,15 @@ private fun AroundContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "${effective.monuments.size} monuments trouvés",
+                                "${visible.size} monuments trouvés",
                                 style = MaterialTheme.typography.labelMedium
                             )
-                            TextButton(onClick = onToggleMap) {
-                                Text(if (showMap) "📋 Liste" else "🗺️ Carte")
+                            Row {
+                                TextButton(onClick = { onOpenCamera() }) { Text("📷") }
+                                TextButton(onClick = { showWalk = true }) { Text("🥾 Balade") }
+                                TextButton(onClick = onToggleMap) {
+                                    Text(if (showMap) "📋 Liste" else "🗺️ Carte")
+                                }
                             }
                         }
                     }
@@ -392,6 +480,66 @@ private fun AroundContent(
             Button(onClick = onLocate) { Text("📍 Détecter ma position") }
         }
     }
+
+    if (showWalk && effective != null) {
+        WalkDialog(
+            stops = viewModel.buildWalk(effective.monuments, effective.lat, effective.lon),
+            onDismiss = { showWalk = false },
+            onNavigate = { openMaps(context, it) }
+        )
+    }
+}
+
+/**
+ * Dialog de balade : chaîne des monuments les plus proches, étape par étape.
+ */
+@Composable
+private fun WalkDialog(
+    stops: List<MonumentsViewModel.WalkStop>,
+    onDismiss: () -> Unit,
+    onNavigate: (Monument) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("🥾 Balade à pied") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Chaîne des monuments les plus proches — touche une étape pour l'itinéraire.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(8.dp))
+                stops.forEachIndexed { index, stop ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNavigate(stop.monument) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${index + 1}.",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(stop.monument.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "${formatDistance(stop.stepM)} · total ${formatDistance(stop.cumulativeM)} (~${(stop.cumulativeM / 80).roundToInt()} min)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
+        }
+    )
 }
 
 @Composable
@@ -573,12 +721,29 @@ private fun CityContent(
     onNavigate: (Monument) -> Unit
 ) {
     var cityQuery by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf<String?>(null) }
+    val cityGuide by viewModel.cityGuide.collectAsStateWithLifecycle()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        cityGuide?.let { (city, extract) ->
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            "🌍 Guide Wikivoyage — $city",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(extract, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
         item {
             Text(
                 "Afficher les monuments d'une ville (rayon 6 km autour du centre).",
@@ -620,13 +785,19 @@ private fun CityContent(
             }
             is UiState.Success -> {
                 if (state.mode == AppMode.CITY) {
+                    val cityName = state.title.removePrefix("Ville : ")
+                    val visible = if (filter == null) state.monuments
+                    else state.monuments.filter { it.category() == filter }
                     item {
                         Text(
-                            "${state.monuments.size} monuments à ${state.title.removePrefix("Ville : ")}",
+                            "${visible.size} monuments à $cityName",
                             style = MaterialTheme.typography.labelMedium
                         )
                     }
-                    items(state.monuments, key = { it.id }) { monument ->
+                    item {
+                        FilterBar(selected = filter, onSelect = { filter = it })
+                    }
+                    items(visible, key = { it.id }) { monument ->
                         MonumentCard(
                             monument = monument,
                             onListen = { onListen(monument) },
@@ -637,6 +808,71 @@ private fun CityContent(
                 }
             }
             else -> {}
+        }
+    }
+}
+
+/**
+ * Carnet de visites : favoris (rouvrables) + monuments visités.
+ */
+@Composable
+private fun BookContent(
+    viewModel: MonumentsViewModel,
+    onSelectMonument: (Monument) -> Unit,
+    onListen: (Monument) -> Unit,
+    onNavigate: (Monument) -> Unit
+) {
+    val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    val visited by viewModel.visited.collectAsStateWithLifecycle()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (favorites.isEmpty() && visited.isEmpty()) {
+            item {
+                CenteredMessage(
+                    "Ton carnet est vide.\nMarque un monument ★ favori ou ✓ visité depuis sa fiche."
+                ) {}
+            }
+            return@LazyColumn
+        }
+        if (favorites.isNotEmpty()) {
+            item { SectionHeader("⭐ Favoris (${favorites.size})") }
+            items(favorites, key = { "fav_${it.id}" }) { fav ->
+                val monument = Monument(
+                    id = fav.id,
+                    name = fav.name,
+                    lat = fav.lat,
+                    lon = fav.lon,
+                    distanceM = 0.0,
+                    kind = fav.kind,
+                    description = fav.description,
+                    imageUrl = fav.imageUrl,
+                    wikidataId = fav.wikidataId
+                )
+                MonumentCard(
+                    monument = monument,
+                    onListen = { onListen(monument) },
+                    onNavigate = { onNavigate(monument) },
+                    onCardClick = { onSelectMonument(monument) }
+                )
+            }
+        }
+        if (visited.isNotEmpty()) {
+            item { SectionHeader("✓ Visités (${visited.size})") }
+            visited.entries.sortedBy { it.value }.forEach { (id, name) ->
+                item(key = "vis_$id") {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "✓ $name",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(14.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -653,11 +889,15 @@ private fun MonumentDetailScreen(
 ) {
     val images by viewModel.monumentImages.collectAsStateWithLifecycle()
     val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
+    val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    val visited by viewModel.visited.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
 
     val isMuseum = monument.kind.lowercase().contains("musée") ||
             monument.kind.lowercase().contains("museum")
+    val isFav = favorites.any { it.id == monument.id }
+    val isVis = visited.containsKey(monument.id)
 
     Scaffold(
         topBar = {
@@ -725,6 +965,38 @@ private fun MonumentDetailScreen(
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+            monument.founder?.let {
+                Text("🏗 Fondé par : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.owner?.let {
+                Text("🏢 Propriétaire : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.openingHours?.let {
+                Text("🕒 Horaires : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.fee?.let {
+                Text("🎟 Entrée : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.website?.let { url ->
+                TextButton(
+                    onClick = { openWebsite(context, url) },
+                    modifier = Modifier.padding(top = 2.dp)
+                ) { Text("🌐 Site officiel") }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                OutlinedButton(onClick = { viewModel.toggleFavorite(monument) }) {
+                    Text(if (isFav) "★ Favori" else "☆ Favori")
+                }
+                OutlinedButton(onClick = { viewModel.toggleVisited(monument) }) {
+                    Text(if (isVis) "✓ Visité" else "○ Visiter")
+                }
+                OutlinedButton(onClick = { shareMonument(context, monument) }) {
+                    Text("📤 Partager")
+                }
             }
             Spacer(Modifier.height(10.dp))
             Text(
@@ -979,7 +1251,7 @@ private fun MonumentCard(
     }
 }
 
-private fun formatDistance(m: Double): String =
+fun formatDistance(m: Double): String =
     if (m >= 1000) "%.1f km".format(m / 1000).replace('.', ',') else "${m.roundToInt()} m"
 
 private fun guideText(m: Monument): String {
@@ -994,5 +1266,40 @@ private fun openMaps(context: Context, m: Monument) {
         context.startActivity(Intent(Intent.ACTION_VIEW, uri))
     } catch (e: Exception) {
         // aucun gestionnaire d'intent geo: (appareil sans Maps) → on ne crashe pas
+    }
+}
+
+/** Ouvre le site web officiel du monument. */
+private fun openWebsite(context: Context, url: String) {
+    val safe = if (url.startsWith("http")) url else "https://$url"
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(safe)))
+    } catch (e: Exception) {
+        // pas de navigateur → silencieux
+    }
+}
+
+/** Partage la fiche du monument (nom, infos, description, lien Wikipédia). */
+private fun shareMonument(context: Context, m: Monument) {
+    val wikiLink = m.wikipediaTitle?.takeIf { it.isNotBlank() }
+        ?.let { "https://fr.wikipedia.org/wiki/${Uri.encode(it.replace(' ', '_'))}" }
+    val text = buildString {
+        append(m.name)
+        m.artist?.let { append(" — $it") }
+        append("\n${m.kind.replace('_', ' ')}")
+        m.inception?.let { append(" · $it") }
+        m.description?.let { append("\n\n$it") }
+        wikiLink?.let { append("\n\n$it") }
+        m.imageUrl?.let { append("\n\nPhoto : $it") }
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, m.name)
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    try {
+        context.startActivity(Intent.createChooser(send, "Partager ${m.name}"))
+    } catch (e: Exception) {
+        // aucun app de partage → silencieux
     }
 }

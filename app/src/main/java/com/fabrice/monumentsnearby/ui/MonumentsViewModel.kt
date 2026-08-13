@@ -1,12 +1,15 @@
 package com.fabrice.monumentsnearby.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fabrice.monumentsnearby.data.GeocoderClient
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.OverpassClient
+import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
+import com.fabrice.monumentsnearby.location.GeofenceHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -35,7 +38,59 @@ data class CityMuseums(
     val museums: List<WikidataClient.Museum>
 )
 
-class MonumentsViewModel : ViewModel() {
+class MonumentsViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repository = VisitRepository(application)
+    private val geofenceHelper = GeofenceHelper(application)
+
+    /** Alerte géofencing active ? */
+    private val _geofencesActive = MutableStateFlow(false)
+    val geofencesActive: StateFlow<Boolean> = _geofencesActive
+
+    /** Active/désactive l'alerte quand on s'approche d'un monument majeur. */
+    fun toggleGeofences() {
+        if (_geofencesActive.value) {
+            geofenceHelper.stop()
+            _geofencesActive.value = false
+        } else {
+            val current = _state.value as? UiState.Success ?: return
+            val monuments = GeofenceHelper.selectMonuments(current.monuments)
+            if (monuments.isEmpty()) return
+            geofenceHelper.start(monuments)
+            _geofencesActive.value = true
+        }
+    }
+
+    /** Favoris du carnet. */
+    private val _favorites = MutableStateFlow(repository.favorites())
+    val favorites: StateFlow<List<com.fabrice.monumentsnearby.data.FavoriteEntry>> = _favorites
+
+    /** Monuments marqués visités : id → nom. */
+    private val _visited = MutableStateFlow(repository.visited())
+    val visited: StateFlow<Map<String, String>> = _visited
+
+    fun toggleFavorite(monument: Monument) {
+        _favorites.value = repository.toggleFavorite(
+            com.fabrice.monumentsnearby.data.FavoriteEntry(
+                id = monument.id,
+                name = monument.name,
+                lat = monument.lat,
+                lon = monument.lon,
+                kind = monument.kind,
+                imageUrl = monument.imageUrl,
+                description = monument.description,
+                wikidataId = monument.wikidataId
+            )
+        )
+    }
+
+    fun isFavorite(id: String): Boolean = repository.isFavorite(id)
+
+    fun toggleVisited(monument: Monument) {
+        _visited.value = repository.toggleVisited(monument.id, monument.name)
+    }
+
+    fun isVisited(id: String): Boolean = repository.isVisited(id)
 
     private val _state = MutableStateFlow<UiState>(UiState.Idle)
     val state: StateFlow<UiState> = _state
@@ -159,12 +214,22 @@ class MonumentsViewModel : ViewModel() {
                 val raw = OverpassClient.fetchMonuments(city.lat, city.lon, radiusM = 6000)
                 var enriched = WikidataClient.enrich(raw)
                 enriched = WikipediaClient.enrich(enriched)
+                // Guide Wikivoyage (non bloquant)
+                _cityGuide.value = try {
+                    WikipediaClient.fetchWikivoyageSummary(city.name)?.let { city.name to it }
+                } catch (e: Exception) {
+                    null
+                }
                 UiState.Success(enriched, city.lat, city.lon, AppMode.CITY, "Ville : ${city.name}")
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")
             }
         }
     }
+
+    /** Guide Wikivoyage de la dernière ville chargée : (ville, extrait). */
+    private val _cityGuide = MutableStateFlow<Pair<String, String>?>(null)
+    val cityGuide: StateFlow<Pair<String, String>?> = _cityGuide
 
     /** Musées visibles autour du centre de la carte (bouton « musées de la zone »). */
     fun loadMuseumsInZone(lat: Double, lon: Double, radiusM: Int = 3000) {
@@ -216,5 +281,58 @@ class MonumentsViewModel : ViewModel() {
 
     fun onLocationUnavailable() {
         _state.value = UiState.Error("Position introuvable. Vérifie que le GPS est activé et dehors/à la fenêtre.")
+    }
+
+    // ---------------------------------------------------------------
+    // Itinéraire de balade — chaîne des monuments les plus proches
+    // ---------------------------------------------------------------
+
+    /** Une étape de la balade. */
+    data class WalkStop(
+        val monument: Monument,
+        val stepM: Double,
+        val cumulativeM: Double
+    )
+
+    /**
+     * Construit un itinéraire en chaîne (plus proche voisin) depuis une position.
+     * Priorité aux monuments majeurs, plafonné à [maxStops] étapes.
+     */
+    fun buildWalk(
+        monuments: List<Monument>,
+        startLat: Double,
+        startLon: Double,
+        maxStops: Int = 8
+    ): List<WalkStop> {
+        val pool = (
+            monuments.filter { it.important } + monuments.filter { !it.important }
+            ).distinctBy { it.id }.take(24)
+        if (pool.isEmpty()) return emptyList()
+
+        val remaining = pool.toMutableList()
+        var curLat = startLat
+        var curLon = startLon
+        var total = 0.0
+        val stops = mutableListOf<WalkStop>()
+        while (remaining.isNotEmpty() && stops.size < maxStops) {
+            val next = remaining.minByOrNull { haversineM(curLat, curLon, it.lat, it.lon) }!!
+            remaining.remove(next)
+            val step = haversineM(curLat, curLon, next.lat, next.lon)
+            total += step
+            stops.add(WalkStop(next, step, total))
+            curLat = next.lat
+            curLon = next.lon
+        }
+        return stops
+    }
+
+    private fun haversineM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        return 2 * r * Math.asin(Math.sqrt(a))
     }
 }

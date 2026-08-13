@@ -12,8 +12,8 @@ android {
         applicationId = "com.fabrice.monumentsnearby"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.6.0"
+        versionCode = 9
+        versionName = "0.7.0"
     }
 
     buildTypes {
@@ -60,4 +60,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.osmdroid:osmdroid-android:6.1.18")
+    // Caméra (mode AR + scanner QR)
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
+    // Scanner QR (ML Kit)
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
 }

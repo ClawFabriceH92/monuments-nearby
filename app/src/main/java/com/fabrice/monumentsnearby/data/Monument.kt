@@ -31,6 +31,35 @@ data class Monument(
     val material: String? = null,
     /** Classement patrimonial (P1435), ex: « Monument historique classé ». */
     val heritage: String? = null,
+    /** Fondateur (P112). */
+    val founder: String? = null,
+    /** Propriétaire (P127). */
+    val owner: String? = null,
+    /** Site web officiel (P856). */
+    val website: String? = null,
+    /** Horaires d'ouverture (OSM opening_hours). */
+    val openingHours: String? = null,
+    /** Tarif (OSM fee/charge) : « payant », « gratuit », ou prix. */
+    val fee: String? = null,
     /** true si monument majeur (article Wikipédia dédié ou type important). */
     val important: Boolean = false
 )
+
+/** Catégorie affichable d'un monument : musée, religieux, château, ruines, monument, autre. */
+fun Monument.category(): String {
+    val k = kind.lowercase()
+    return when {
+        k.contains("musée") || k.contains("museum") -> "musée"
+        k.contains("église") || k.contains("cathédrale") || k.contains("basilique") ||
+            k.contains("chapelle") || k.contains("temple") || k.contains("monastère") ||
+            k.contains("abbaye") || k.contains("convent") || k.contains("abbey") -> "religieux"
+        k.contains("château") || k.contains("palais") || k.contains("manoir") ||
+            k.contains("fort") || k.contains("castle") || k.contains("palace") ||
+            k.contains("manor") || k.contains("chateau") -> "château"
+        k.contains("ruine") || k.contains("archéologique") || k.contains("archaeological") ||
+            k.contains("ruins") -> "ruines"
+        k.contains("monument") || k.contains("mémorial") || k.contains("memorial") ||
+            k.contains("fontaine") || k.contains("fountain") || k.contains("battlefield") -> "monument"
+        else -> "autre"
+    }
+}

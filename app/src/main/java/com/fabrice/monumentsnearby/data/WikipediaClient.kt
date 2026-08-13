@@ -66,4 +66,25 @@ object WikipediaClient {
             }
         }
     }
+
+    /**
+     * Résumé Wikivoyage d'une ville (guide touristique). Non bloquant.
+     * Ex: https://fr.wikivoyage.org/api/rest_v1/page/summary/Asnières-sur-Seine
+     */
+    suspend fun fetchWikivoyageSummary(city: String): String? {
+        val url = "https://fr.wikivoyage.org/api/rest_v1/page/summary/" +
+                URLEncoder.encode(city.replace(' ', '_'), "UTF-8")
+        val request = Request.Builder().url(url).build()
+        return try {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body?.string() ?: return null
+                val extract = JSONObject(body).optString("extract").takeIf { it.isNotBlank() }
+                    ?: return null
+                if (extract.length > 600) extract.take(600).trimEnd() + "…" else extract
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 }

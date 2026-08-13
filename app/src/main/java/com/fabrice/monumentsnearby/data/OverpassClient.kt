@@ -144,7 +144,11 @@ object OverpassClient {
                 imageUrl = tags.optString("image").takeIf { it.isNotBlank() }
                     ?.replace("http://", "https://"),
                 wikidataId = tags.optString("wikidata").takeIf { it.isNotBlank() },
-                wikipediaTitle = wikipedia?.substringAfter(':')
+                wikipediaTitle = wikipedia?.substringAfter(':'),
+                openingHours = tags.optString("opening_hours").takeIf { it.isNotBlank() },
+                fee = tags.optString("charge").takeIf { it.isNotBlank() }
+                    ?: tags.optString("fee").takeIf { it == "yes" || it == "no" }
+                        ?.let { if (it == "yes") "payant" else "gratuit" }
             )
         }
         return result.sortedBy { it.distanceM }

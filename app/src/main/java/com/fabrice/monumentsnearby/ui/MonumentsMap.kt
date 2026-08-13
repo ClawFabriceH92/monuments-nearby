@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.fabrice.monumentsnearby.R
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.category
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -67,7 +68,7 @@ fun MonumentsMap(
                             title = m.name
                             snippet = m.description ?: m.kind.replace('_', ' ')
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            icon = ctx.getDrawable(pinForKind(m.kind))
+                            icon = ctx.getDrawable(pinForCategory(m.category()))
                         }
                     )
                 }
@@ -80,28 +81,17 @@ private const val WALK_5MIN_M = 400
 private const val WALK_15MIN_M = 1200
 
 /**
- * Couleur du marqueur selon le type du monument :
- * rouge = musée, violet = édifice religieux, orange = château/palais/fort,
- * marron = ruines/archéologie, bleu = monument/mémorial, vert = autre.
+ * Couleur du marqueur selon la catégorie du monument :
+ * rouge = musée, violet = religieux, orange = château/palais/fort,
+ * marron = ruines, bleu = monument/mémorial, vert = autre.
  */
-private fun pinForKind(kind: String): Int {
-    val k = kind.lowercase()
-    return when {
-        k.contains("musée") || k.contains("museum") -> R.drawable.ic_pin_rouge
-        k.contains("église") || k.contains("cathédrale") || k.contains("basilique") ||
-            k.contains("chapelle") || k.contains("temple") || k.contains("monastère") ||
-            k.contains("abbaye") || k.contains("convent") || k.contains("abbey") ->
-            R.drawable.ic_pin_violet
-        k.contains("château") || k.contains("palais") || k.contains("manoir") ||
-            k.contains("fort") || k.contains("castle") || k.contains("palace") ||
-            k.contains("manor") || k.contains("chateau") -> R.drawable.ic_pin_orange
-        k.contains("ruine") || k.contains("archéologique") || k.contains("archaeological") ||
-            k.contains("ruins") || k.contains("site archéologique") -> R.drawable.ic_pin_marron
-        k.contains("monument") || k.contains("mémorial") || k.contains("memorial") ||
-            k.contains("fontaine") || k.contains("fountain") || k.contains("battlefield") ->
-            R.drawable.ic_pin_bleu
-        else -> R.drawable.ic_pin_vert
-    }
+private fun pinForCategory(category: String): Int = when (category) {
+    "musée" -> R.drawable.ic_pin_rouge
+    "religieux" -> R.drawable.ic_pin_violet
+    "château" -> R.drawable.ic_pin_orange
+    "ruines" -> R.drawable.ic_pin_marron
+    "monument" -> R.drawable.ic_pin_bleu
+    else -> R.drawable.ic_pin_vert
 }
 
 /**
