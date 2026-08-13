@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<incidents format="6" by="lint 8.7.3" type="partial_results">
+    <map id="UnsafeImplicitIntentLaunch">
+            <map id="actionsSent">
+                    <map id="android.intent.action.VIEW (used to start an activity)">
+                        <location id="0"
+                            file="${:app*debug*MAIN*sourceProvider*0*javaDir*0}/com/fabrice/monumentsnearby/ui/MonumentsScreen.kt"
+                            line="210"
+                            column="31"
+                            startOffset="8066"
+                            endLine="210"
+                            endColumn="62"
+                            endOffset="8097"/>
+                    </map>
+            </map>
+    </map>
+    <map id="UnsafeIntentLaunch">
+            <map id="unprotected">
+                <entry
+                    name="com.fabrice.monumentsnearby.MainActivity"
+                    boolean="true"/>
+            </map>
+    </map>
+    <map id="UnusedResources">
+        <entry
+            name="model"
+            string="color[ic_launcher_background(U)],drawable[ic_launcher_foreground(U)],mipmap[ic_launcher(U)],string[app_name(U)],style[Theme_MonumentsNearby(U)];2^0^1;;;"/>
+    </map>
+
+</incidents>

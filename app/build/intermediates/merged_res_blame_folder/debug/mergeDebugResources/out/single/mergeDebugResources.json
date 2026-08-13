@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.fabrice.monumentsnearby.app-debug-50:/mipmap-anydpi_ic_launcher.xml.flat",
+        "source": "com.fabrice.monumentsnearby.app-main-52:/mipmap-anydpi/ic_launcher.xml"
+    },
+    {
+        "merged": "com.fabrice.monumentsnearby.app-debug-50:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.fabrice.monumentsnearby.app-main-52:/drawable/ic_launcher_foreground.xml"
+    }
+]
