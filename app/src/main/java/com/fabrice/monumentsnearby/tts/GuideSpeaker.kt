@@ -26,6 +26,13 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
     private var pending: String? = null
     private var selectedVoiceName: String? = prefs.getString("voice", null)
 
+    /** Vitesse de parole (1.0 = normale). Persistée, appliquée à l'init pour
+     *  ne pas hériter du réglage TTS système (souvent accéléré par l'utilisateur). */
+    var speed: Float = prefs.getFloat("speed", 1.0f)
+        private set
+
+    val currentSpeed: Float get() = speed
+
     /** Voix disponibles, françaises en premier. */
     val voices: List<TtsVoice>
         get() = (tts.voices ?: emptySet())
@@ -37,6 +44,7 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
         if (ready) {
             tts.language = Locale.FRENCH
             applySelectedVoice()
+            tts.setSpeechRate(speed) // écrase le réglage système → vitesse contrôlée par l'app
             pending?.let { speak(it) }
             pending = null
         }
@@ -47,6 +55,15 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
         prefs.edit().putString("voice", name).apply()
         if (ready) {
             tts.voices?.firstOrNull { it.name == name }?.let { tts.setVoice(it) }
+        }
+    }
+
+    /** Règle la vitesse de parole (0.25–2.0) et la persiste. */
+    fun setSpeed(rate: Float) {
+        speed = rate.coerceIn(0.25f, 2.0f)
+        prefs.edit().putFloat("speed", speed).apply()
+        if (ready) {
+            tts.setSpeechRate(speed)
         }
     }
 

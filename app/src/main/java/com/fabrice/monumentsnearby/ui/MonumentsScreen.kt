@@ -170,12 +170,53 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
     val voices = speaker.voices
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Voix de l'audioguide") },
+        title = { Text("Audioguide") },
         text = {
-            if (voices.isEmpty()) {
-                Text("Aucune voix disponible sur cet appareil.")
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                // Vitesse de lecture — chaque palier joue un test immédiatement
+                Text(
+                    "Vitesse de lecture",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f).forEach { rate ->
+                        val selected = speaker.currentSpeed == rate
+                        TextButton(
+                            onClick = {
+                                speaker.setSpeed(rate)
+                                speaker.speak("Vitesse réglée sur ${formatRate(rate)}.")
+                            }
+                        ) {
+                            Text(
+                                text = formatRate(rate),
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Vitesse actuelle : ${formatRate(speaker.currentSpeed)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                // Choix de la voix
+                Text(
+                    "Voix",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+                if (voices.isEmpty()) {
+                    Text("Aucune voix disponible sur cet appareil.")
+                } else {
                     voices.forEach { voice ->
                         TextButton(
                             onClick = {
@@ -195,6 +236,8 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
         }
     )
 }
+
+private fun formatRate(rate: Float): String = if (rate == 1f) "1×" else "${rate}×"
 
 @Composable
 private fun SectionHeader(title: String) {
