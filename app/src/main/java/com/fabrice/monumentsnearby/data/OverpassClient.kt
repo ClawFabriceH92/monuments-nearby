@@ -141,7 +141,8 @@ object OverpassClient {
                 description = tags.optString("description").takeIf { it.isNotBlank() }
                     ?: tags.optString("historic").takeIf { it.isNotBlank() && it != kind },
                 wikipedia = wikipedia,
-                imageUrl = tags.optString("image").takeIf { it.isNotBlank() },
+                imageUrl = tags.optString("image").takeIf { it.isNotBlank() }
+                    ?.replace("http://", "https://"),
                 wikidataId = tags.optString("wikidata").takeIf { it.isNotBlank() },
                 wikipediaTitle = wikipedia?.substringAfter(':')
             )

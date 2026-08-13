@@ -30,6 +30,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -58,6 +60,8 @@ import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import kotlin.math.roundToInt
 
+enum class AppTab { AROUND, MUSEUMS, CITY }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MonumentsScreen(
@@ -69,120 +73,304 @@ fun MonumentsScreen(
     val speaker = remember { GuideSpeaker(context) }
     DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
 
+    var selectedTab by remember { mutableStateOf(AppTab.AROUND) }
     var showMap by remember { mutableStateOf(false) }
     var showVoiceDialog by remember { mutableStateOf(false) }
-    var showMuseumDialog by remember { mutableStateOf(false) }
-    var showCityDialog by remember { mutableStateOf(false) }
     var selectedMonument by remember { mutableStateOf<Monument?>(null) }
     val paused = remember { mutableStateOf(false) }
+    var selectedMuseum by remember { mutableStateOf<WikidataClient.Museum?>(null) }
+    var showMuseumSearch by remember { mutableStateOf(true) }
 
-    // Titre conservé pendant le chargement
     var lastTitle by remember { mutableStateOf("Monuments à proximité") }
     val success = state as? UiState.Success
     SideEffect {
         if (success != null) lastTitle = success.title
     }
     val isMuseumMode = success?.mode == AppMode.MUSEUM
-    if (isMuseumMode) showMap = false
 
-    // Resynchronise le bouton pause quand la lecture se termine
     DisposableEffect(Unit) {
         speaker.onFinished = { paused.value = false }
         onDispose { speaker.shutdown() }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(lastTitle) },
-                actions = {
-                    // Mode monuments autour de moi
-                    TextButton(onClick = onLocate) {
-                        Text("📍", style = MaterialTheme.typography.titleLarge)
+    if (selectedMonument != null) {
+        MonumentDetailScreen(
+            monument = selectedMonument!!,
+            viewModel = viewModel,
+            onClose = {
+                selectedMonument = null
+                viewModel.clearMonumentImages()
+            },
+            onListen = { speaker.speak(guideText(selectedMonument!!)) },
+            onViewWorks = {
+                val qid = selectedMonument!!.wikidataId ?: return@MonumentDetailScreen
+                val museum = WikidataClient.Museum(
+                    qid = qid,
+                    name = selectedMonument!!.name,
+                    description = selectedMonument!!.description,
+                    imageUrl = selectedMonument!!.imageUrl,
+                    lat = selectedMonument!!.lat,
+                    lon = selectedMonument!!.lon
+                )
+                selectedMuseum = museum
+                selectedTab = AppTab.MUSEUMS
+                showMuseumSearch = false
+                selectedMonument = null
+                viewModel.clearMonumentImages()
+                viewModel.loadMuseumArtworks(museum)
+            }
+        )
+    } else {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            when (selectedTab) {
+                                AppTab.AROUND -> lastTitle
+                                AppTab.MUSEUMS -> if (selectedMuseum != null) selectedMuseum!!.name else "Musées"
+                                AppTab.CITY -> "Ville"
+                            }
+                        )
+                    },
+                    actions = {
+                        TextButton(onClick = { paused.value = speaker.togglePause() }) {
+                            Text(if (paused.value) "▶ Reprendre" else "⏸ Pause")
+                        }
+                        TextButton(onClick = { showVoiceDialog = true }) {
+                            Text("Voix")
+                        }
                     }
-                    // Mode musée : rechercher / musées par ville
-                    TextButton(onClick = { showMuseumDialog = true }) {
-                        Text("🏛️", style = MaterialTheme.typography.titleLarge)
-                    }
-                    // Mode ville : monuments d'une ville
-                    TextButton(onClick = { showCityDialog = true }) {
-                        Text("🏙️", style = MaterialTheme.typography.titleLarge)
-                    }
-                    // Bascule liste ↔ carte (inutile en mode musée : œuvres au même point)
-                    if (!isMuseumMode) {
-                        TextButton(onClick = { showMap = !showMap }) {
+                )
+            },
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = selectedTab == AppTab.AROUND,
+                        onClick = { selectedTab = AppTab.AROUND },
+                        icon = { Text("📍") },
+                        label = { Text("Autour de moi") }
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == AppTab.MUSEUMS,
+                        onClick = { selectedTab = AppTab.MUSEUMS },
+                        icon = { Text("🏛") },
+                        label = { Text("Musées") }
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == AppTab.CITY,
+                        onClick = { selectedTab = AppTab.CITY },
+                        icon = { Text("🏙") },
+                        label = { Text("Ville") }
+                    )
+                }
+            },
+            floatingActionButton = {
+                if (selectedTab == AppTab.AROUND && showMap && !isMuseumMode) {
+                    ExtendedFloatingActionButton(
+                        text = { Text("🏛 Musées ici") },
+                        icon = {},
+                        onClick = {
+                            val s = state as? UiState.Success ?: return@ExtendedFloatingActionButton
+                            viewModel.loadMuseumsInZone(s.lat, s.lon)
+                            showMap = false
+                            selectedTab = AppTab.MUSEUMS
+                            showMuseumSearch = false
+                            selectedMuseum = null
+                        }
+                    )
+                }
+            }
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+            ) {
+                when (selectedTab) {
+                    AppTab.AROUND -> AroundContent(
+                        state = state,
+                        viewModel = viewModel,
+                        speaker = speaker,
+                        context = context,
+                        showMap = showMap,
+                        onToggleMap = { showMap = !showMap },
+                        onSelectMonument = { selectedMonument = it },
+                        onLocate = onLocate
+                    )
+                    AppTab.MUSEUMS -> MuseumContent(
+                        state = state,
+                        viewModel = viewModel,
+                        showMuseumSearch = showMuseumSearch,
+                        onShowMuseumSearch = { showMuseumSearch = true },
+                        onSelectMuseum = { museum ->
+                            selectedMuseum = museum
+                            showMuseumSearch = false
+                            viewModel.loadMuseumArtworks(museum)
+                        },
+                        onSelectMonument = { selectedMonument = it },
+                        onListen = { speaker.speak(guideText(it)) },
+                        onNavigate = { openMaps(context, it) }
+                    )
+                    AppTab.CITY -> CityContent(
+                        state = state,
+                        viewModel = viewModel,
+                        onSelectMonument = { selectedMonument = it },
+                        onListen = { speaker.speak(guideText(it)) },
+                        onNavigate = { openMaps(context, it) }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showVoiceDialog) {
+        VoiceDialog(speaker = speaker, onDismiss = { showVoiceDialog = false })
+    }
+}
+
+@Composable
+private fun AroundContent(
+    state: UiState,
+    viewModel: MonumentsViewModel,
+    speaker: GuideSpeaker,
+    context: Context,
+    showMap: Boolean,
+    onToggleMap: () -> Unit,
+    onSelectMonument: (Monument) -> Unit,
+    onLocate: () -> Unit
+) {
+    when (state) {
+        is UiState.Idle -> CenteredMessage("Appuie pour détecter les monuments autour de toi") {
+            Button(onClick = onLocate) { Text("📍 Détecter ma position") }
+        }
+
+        is UiState.Loading -> Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator()
+            Text("Recherche…")
+        }
+
+        is UiState.Error -> CenteredMessage(state.message) {
+            Button(onClick = onLocate) { Text("Réessayer") }
+        }
+
+        is UiState.Success -> {
+            if (state.mode != AppMode.MONUMENTS) {
+                CenteredMessage("Appuie pour détecter les monuments autour de toi") {
+                    Button(onClick = onLocate) { Text("📍 Détecter ma position") }
+                }
+            } else if (state.monuments.isEmpty()) {
+                CenteredMessage("Aucun monument trouvé à proximité.") {
+                    Button(onClick = onLocate) { Text("📍 Réessayer") }
+                }
+            } else if (showMap) {
+                MonumentsMap(
+                    monuments = state.monuments,
+                    centerLat = state.lat,
+                    centerLon = state.lon
+                )
+            } else {
+                val majors = state.monuments.filter { it.important }
+                val others = state.monuments.filter { !it.important }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = if (showMap) "📋" else "🗺️",
-                                style = MaterialTheme.typography.titleLarge
+                                "${state.monuments.size} monuments trouvés",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            TextButton(onClick = onToggleMap) {
+                                Text(if (showMap) "📋 Liste" else "🗺️ Carte")
+                            }
+                        }
+                    }
+                    if (majors.isNotEmpty()) {
+                        item { SectionHeader("⭐ Monuments majeurs") }
+                        items(majors, key = { it.id }) { monument ->
+                            MonumentCard(
+                                monument = monument,
+                                onListen = { speaker.speak(guideText(monument)) },
+                                onNavigate = { openMaps(context, monument) },
+                                onCardClick = { onSelectMonument(monument) }
                             )
                         }
                     }
-                    // Pause / reprise de l'audioguide
-                    TextButton(onClick = { paused.value = speaker.togglePause() }) {
-                        Text(
-                            text = if (paused.value) "▶️" else "⏸️",
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    }
-                    // Choix de la voix et de la vitesse de l'audioguide
-                    TextButton(onClick = { showVoiceDialog = true }) {
-                        Text("🔊", style = MaterialTheme.typography.titleLarge)
+                    if (others.isNotEmpty()) {
+                        item { SectionHeader("Autres monuments") }
+                        items(others, key = { it.id }) { monument ->
+                            MonumentCard(
+                                monument = monument,
+                                onListen = { speaker.speak(guideText(monument)) },
+                                onNavigate = { openMaps(context, monument) },
+                                onCardClick = { onSelectMonument(monument) }
+                            )
+                        }
                     }
                 }
-            )
-        },
-        floatingActionButton = {
-            // Sur la carte : charger les musées de la zone visible
-            if (showMap && !isMuseumMode) {
-                ExtendedFloatingActionButton(
-                    text = { Text("🏛️ Musées ici") },
-                    icon = {},
-                    onClick = {
-                        val s = state as? UiState.Success ?: return@ExtendedFloatingActionButton
-                        viewModel.loadMuseumsInZone(s.lat, s.lon)
-                        showMap = false
-                    }
-                )
             }
         }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-        ) {
-            when (state) {
-                is UiState.Idle -> CenteredMessage("Appuie pour détecter les monuments autour de toi") {
-                    Button(onClick = onLocate) { Text("📍 Détecter ma position") }
-                }
+    }
+}
 
+@Composable
+private fun MuseumContent(
+    state: UiState,
+    viewModel: MonumentsViewModel,
+    showMuseumSearch: Boolean,
+    onShowMuseumSearch: () -> Unit,
+    onSelectMuseum: (WikidataClient.Museum) -> Unit,
+    onSelectMonument: (Monument) -> Unit,
+    onListen: (Monument) -> Unit,
+    onNavigate: (Monument) -> Unit
+) {
+    if (showMuseumSearch) {
+        MuseumSearchForm(
+            viewModel = viewModel,
+            onSelectMuseum = onSelectMuseum
+        )
+    } else {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onShowMuseumSearch) {
+                    Text("← Retour à la recherche")
+                }
+                Spacer(Modifier.weight(1f))
+            }
+            when (state) {
                 is UiState.Loading -> Column(
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.Center
                 ) {
                     CircularProgressIndicator()
-                    Text("Recherche…")
+                    Text("Chargement…")
                 }
-
                 is UiState.Error -> CenteredMessage(state.message) {
-                    Button(onClick = onLocate) { Text("Réessayer") }
+                    Button(onClick = onShowMuseumSearch) { Text("Retour") }
                 }
-
                 is UiState.Success -> {
                     if (state.monuments.isEmpty()) {
-                        CenteredMessage("Aucun résultat trouvé. Essaie une autre ville ou un autre musée !") {
-                            Button(onClick = onLocate) { Text("📍 Retour aux monuments") }
+                        CenteredMessage("Aucune œuvre trouvée pour ce musée.") {
+                            Button(onClick = onShowMuseumSearch) { Text("Retour") }
                         }
-                    } else if (showMap && !isMuseumMode) {
-                        MonumentsMap(
-                            monuments = state.monuments,
-                            centerLat = state.lat,
-                            centerLon = state.lon
-                        )
                     } else {
-                        val majors = state.monuments.filter { it.important }
-                        val others = state.monuments.filter { !it.important }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(12.dp),
@@ -190,83 +378,31 @@ fun MonumentsScreen(
                         ) {
                             item {
                                 Text(
-                                    "${state.monuments.size} ${if (isMuseumMode) "œuvres" else "monuments"} trouvés",
+                                    "${state.monuments.size} œuvres trouvées",
                                     style = MaterialTheme.typography.labelMedium
                                 )
                             }
-                            if (majors.isNotEmpty()) {
-                                item { SectionHeader(if (isMuseumMode) "⭐ Œuvres majeures" else "⭐ Monuments majeurs") }
-                                items(majors, key = { it.id }) { monument ->
-                                    MonumentCard(
-                                        monument = monument,
-                                        onListen = { speaker.speak(guideText(monument)) },
-                                        onNavigate = { openMaps(context, monument) },
-                                        onCardClick = { selectedMonument = monument }
-                                    )
-                                }
-                            }
-                            if (others.isNotEmpty()) {
-                                item { SectionHeader(if (isMuseumMode) "Autres œuvres" else "Autres monuments") }
-                                items(others, key = { it.id }) { monument ->
-                                    MonumentCard(
-                                        monument = monument,
-                                        onListen = { speaker.speak(guideText(monument)) },
-                                        onNavigate = { openMaps(context, monument) },
-                                        onCardClick = { selectedMonument = monument }
-                                    )
-                                }
+                            items(state.monuments, key = { it.id }) { monument ->
+                                MonumentCard(
+                                    monument = monument,
+                                    onListen = { onListen(monument) },
+                                    onNavigate = { onNavigate(monument) },
+                                    onCardClick = { onSelectMonument(monument) }
+                                )
                             }
                         }
                     }
                 }
+                else -> CenteredMessage("Chargement…") {}
             }
         }
     }
-
-    if (showMuseumDialog) {
-        MuseumDialog(viewModel = viewModel, onDismiss = { showMuseumDialog = false })
-    }
-    if (showCityDialog) {
-        CityDialog(viewModel = viewModel, onDismiss = { showCityDialog = false })
-    }
-    if (showVoiceDialog) {
-        VoiceDialog(speaker = speaker, onDismiss = { showVoiceDialog = false })
-    }
-    selectedMonument?.let { monument ->
-        MonumentDetailDialog(
-            monument = monument,
-            viewModel = viewModel,
-            onDismiss = {
-                selectedMonument = null
-                viewModel.clearMonumentImages()
-            },
-            onListen = { speaker.speak(guideText(monument)) },
-            onViewWorks = {
-                val qid = monument.wikidataId ?: return@MonumentDetailDialog
-                viewModel.loadMuseumArtworks(
-                    WikidataClient.Museum(
-                        qid = qid,
-                        name = monument.name,
-                        description = monument.description,
-                        imageUrl = monument.imageUrl,
-                        lat = monument.lat,
-                        lon = monument.lon
-                    )
-                )
-                selectedMonument = null
-                viewModel.clearMonumentImages()
-            }
-        )
-    }
 }
 
-/**
- * Sélecteur de musée : recherche par nom (Wikidata) ou musées d'une ville.
- */
 @Composable
-private fun MuseumDialog(
+private fun MuseumSearchForm(
     viewModel: MonumentsViewModel,
-    onDismiss: () -> Unit
+    onSelectMuseum: (WikidataClient.Museum) -> Unit
 ) {
     var cityMode by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -275,142 +411,278 @@ private fun MuseumDialog(
     val museumResults by viewModel.museumResults.collectAsStateWithLifecycle()
     val cityMuseums by viewModel.cityMuseums.collectAsStateWithLifecycle()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("🏛️ Musée") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (!cityMode) {
-                    // Recherche par nom
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = {
-                            searchQuery = it
-                            viewModel.searchMuseums(it)
-                        },
-                        label = { Text("Rechercher un musée") },
-                        placeholder = { Text("Louvre, Orsay, Pompidou…") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        if (!cityMode) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = {
+                    searchQuery = it
+                    viewModel.searchMuseums(it)
+                },
+                label = { Text("Rechercher un musée") },
+                placeholder = { Text("Louvre, Orsay, Pompidou…") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            if (searching) {
+                SearchRow()
+            } else {
+                museumResults.forEach { museum ->
+                    MuseumResultButton(museum, onClick = { onSelectMuseum(museum) })
+                }
+                if (searchQuery.isNotBlank() && museumResults.isEmpty()) {
+                    Text(
+                        "Aucun musée trouvé pour « $searchQuery ».",
+                        style = MaterialTheme.typography.bodySmall
                     )
-                    Spacer(Modifier.height(8.dp))
-                    if (searching) {
-                        SearchRow()
-                    } else {
-                        museumResults.forEach { museum ->
-                            MuseumResultButton(museum, onClick = {
-                                viewModel.loadMuseumArtworks(museum)
-                                onDismiss()
-                            })
-                        }
-                        if (searchQuery.isNotBlank() && museumResults.isEmpty()) {
-                            Text(
-                                "Aucun musée trouvé pour « $searchQuery ».",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                    TextButton(
-                        onClick = { cityMode = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("🏙️ Voir les musées d'une ville")
-                    }
-                } else {
-                    // Musées par ville
-                    OutlinedTextField(
-                        value = cityQuery,
-                        onValueChange = { cityQuery = it },
-                        label = { Text("Nom de la ville") },
-                        placeholder = { Text("Paris, Asnières-sur-Seine…") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { viewModel.loadMuseumsInCity(cityQuery) },
-                        enabled = cityQuery.isNotBlank() && !searching,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Rechercher les musées") }
-                    Spacer(Modifier.height(8.dp))
-                    if (searching) {
-                        SearchRow()
-                    } else {
-                        val cm = cityMuseums
-                        if (cm != null) {
-                            Text(
-                                "${cm.museums.size} musées à ${cm.cityName}",
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                            if (cm.museums.isEmpty()) {
-                                Text(
-                                    "Aucun musée indexé (avec identifiant Wikidata) trouvé.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            cm.museums.forEach { museum ->
-                                MuseumResultButton(museum, onClick = {
-                                    viewModel.loadMuseumArtworks(museum)
-                                    onDismiss()
-                                })
-                            }
-                        }
-                    }
-                    TextButton(
-                        onClick = { cityMode = false },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("← Recherche par nom") }
                 }
             }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Fermer") }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            TextButton(
+                onClick = { cityMode = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🏙️ Voir les musées d'une ville")
+            }
+        } else {
+            OutlinedTextField(
+                value = cityQuery,
+                onValueChange = { cityQuery = it },
+                label = { Text("Nom de la ville") },
+                placeholder = { Text("Paris, Asnières-sur-Seine…") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { viewModel.loadMuseumsInCity(cityQuery) },
+                enabled = cityQuery.isNotBlank() && !searching,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Rechercher les musées") }
+            Spacer(Modifier.height(8.dp))
+            if (searching) {
+                SearchRow()
+            } else {
+                val cm = cityMuseums
+                if (cm != null) {
+                    Text(
+                        "${cm.museums.size} musées à ${cm.cityName}",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    if (cm.museums.isEmpty()) {
+                        Text(
+                            "Aucun musée indexé (avec identifiant Wikidata) trouvé.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    cm.museums.forEach { museum ->
+                        MuseumResultButton(museum, onClick = { onSelectMuseum(museum) })
+                    }
+                }
+            }
+            TextButton(
+                onClick = { cityMode = false },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("← Recherche par nom") }
         }
-    )
+    }
 }
 
-/** Sélecteur de ville : monuments de la ville choisie. */
 @Composable
-private fun CityDialog(
+private fun CityContent(
+    state: UiState,
     viewModel: MonumentsViewModel,
-    onDismiss: () -> Unit
+    onSelectMonument: (Monument) -> Unit,
+    onListen: (Monument) -> Unit,
+    onNavigate: (Monument) -> Unit
 ) {
     var cityQuery by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("🏙️ Ville") },
-        text = {
-            Column {
-                Text(
-                    "Afficher les monuments d'une ville (rayon 6 km autour du centre).",
-                    style = MaterialTheme.typography.bodyMedium
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Text(
+                "Afficher les monuments d'une ville (rayon 6 km autour du centre).",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = cityQuery,
+                onValueChange = { cityQuery = it },
+                label = { Text("Nom de la ville") },
+                placeholder = { Text("Versailles, Lyon, Asnières…") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        item {
+            Button(
+                onClick = { viewModel.loadCity(cityQuery.trim()) },
+                enabled = cityQuery.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Afficher") }
+        }
+
+        when (state) {
+            is UiState.Loading -> item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Recherche…")
+                }
+            }
+            is UiState.Error -> item {
+                CenteredMessage(state.message) {}
+            }
+            is UiState.Success -> {
+                if (state.mode == AppMode.CITY) {
+                    item {
+                        Text(
+                            "${state.monuments.size} monuments à ${state.title.removePrefix("Ville : ")}",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    items(state.monuments, key = { it.id }) { monument ->
+                        MonumentCard(
+                            monument = monument,
+                            onListen = { onListen(monument) },
+                            onNavigate = { onNavigate(monument) },
+                            onCardClick = { onSelectMonument(monument) }
+                        )
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MonumentDetailScreen(
+    monument: Monument,
+    viewModel: MonumentsViewModel,
+    onClose: () -> Unit,
+    onListen: () -> Unit,
+    onViewWorks: () -> Unit
+) {
+    val images by viewModel.monumentImages.collectAsStateWithLifecycle()
+    val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
+
+    val isMuseum = monument.kind.lowercase().contains("musée") ||
+            monument.kind.lowercase().contains("museum")
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(monument.name, style = MaterialTheme.typography.titleMedium) },
+                navigationIcon = {
+                    TextButton(onClick = onClose) { Text("← Retour") }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+        ) {
+            monument.imageUrl?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = monument.name,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop
                 )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = cityQuery,
-                    onValueChange = { cityQuery = it },
-                    label = { Text("Nom de la ville") },
-                    placeholder = { Text("Versailles, Lyon, Asnières…") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                Spacer(Modifier.height(12.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = monument.kind.replace('_', ' '),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                monument.inception?.let {
+                    Text(
+                        text = if (monument.artist != null) "📅 $it" else "Construit en $it",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+            monument.artist?.let { artist ->
+                Text(
+                    text = "🎨 $artist",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.secondary
                 )
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    viewModel.loadCity(cityQuery.trim())
-                    onDismiss()
-                },
-                enabled = cityQuery.isNotBlank()
-            ) { Text("Afficher") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Annuler") }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = monument.description ?: "Aucune description disponible.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            if (loadingImages && images.isEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                SearchRow()
+            } else if (images.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Photos",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(6.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(images) { url ->
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(120.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onListen) { Text("🔊 Écouter") }
+                Button(onClick = { openMaps(context, monument) }) { Text("Itinéraire") }
+            }
+
+            if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onViewWorks,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("🏛️ Voir les œuvres de ce musée") }
+            }
         }
-    )
+    }
 }
 
 @Composable
@@ -451,7 +723,6 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
         title = { Text("Audioguide") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                // Vitesse de lecture — chaque palier joue un test immédiatement
                 Text(
                     "Vitesse de lecture",
                     style = MaterialTheme.typography.titleSmall,
@@ -485,7 +756,6 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
                 )
                 Spacer(Modifier.height(12.dp))
 
-                // Choix de la voix
                 Text(
                     "Voix",
                     style = MaterialTheme.typography.titleSmall,
@@ -618,117 +888,6 @@ private fun MonumentCard(
             }
         }
     }
-}
-
-/**
- * Détail d'un monument : texte complet, infos, galerie d'images Commons,
- * et accès aux œuvres si c'est un musée.
- */
-@Composable
-private fun MonumentDetailDialog(
-    monument: Monument,
-    viewModel: MonumentsViewModel,
-    onDismiss: () -> Unit,
-    onListen: () -> Unit,
-    onViewWorks: () -> Unit
-) {
-    val images by viewModel.monumentImages.collectAsStateWithLifecycle()
-    val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
-
-    val isMuseum = monument.kind.lowercase().contains("musée") ||
-            monument.kind.lowercase().contains("museum")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(monument.name, style = MaterialTheme.typography.titleMedium) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                monument.imageUrl?.let { url ->
-                    AsyncImage(
-                        model = url,
-                        contentDescription = monument.name,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                Row {
-                    Text(
-                        text = monument.kind.replace('_', ' '),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    monument.inception?.let {
-                        Text(
-                            text = if (monument.artist != null) "📅 $it" else "Construit en $it",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-                monument.artist?.let { artist ->
-                    Text(
-                        text = "🎨 $artist",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = monument.description ?: "Aucune description disponible.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-
-                // Galerie d'images (catégorie Commons du monument)
-                if (loadingImages && images.isEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    SearchRow()
-                } else if (images.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "Photos",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(images) { url ->
-                            AsyncImage(
-                                model = url,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(120.dp)
-                                    .clip(RoundedCornerShape(6.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
-                    }
-                }
-
-                if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = onViewWorks,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("🏛️ Voir les œuvres de ce musée") }
-                }
-            }
-        },
-        confirmButton = {
-            Row {
-                OutlinedButton(onClick = onListen) { Text("🔊 Écouter") }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { openMaps(context, monument) }) { Text("Itinéraire") }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Fermer") }
-        }
-    )
 }
 
 private fun formatDistance(m: Double): String =
