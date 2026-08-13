@@ -21,6 +21,8 @@ data class Monument(
     val inception: String? = null,
     /** Artiste (œuvres de musée, P170 Wikidata). */
     val artist: String? = null,
+    /** Catégorie Wikimedia Commons (P373) — pour la galerie d'images. */
+    val commonsCategory: String? = null,
     /** true si monument majeur (article Wikipédia dédié ou type important). */
     val important: Boolean = false
 )

@@ -2,6 +2,7 @@ package com.fabrice.monumentsnearby.tts
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import java.util.Locale
 
@@ -15,6 +16,8 @@ data class TtsVoice(
  * Audioguide hors-ligne : TTS Android natif, aucune dépendance réseau.
  * - Bufferise le texte si l'utilisateur clique avant l'initialisation du moteur.
  * - Voix sélectionnable (voix système), choix persisté en SharedPreferences.
+ * - Pause/reprise : le texte est découpé en phrases ; la pause coupe à la fin
+ *   de la phrase en cours, la reprise continue à la phrase suivante.
  */
 class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
 
@@ -33,6 +36,16 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
 
     val currentSpeed: Float get() = speed
 
+    // Lecture par phrases (pour la pause/reprise)
+    private val phrases = mutableListOf<String>()
+    private var phraseIndex = 0
+    private var paused = false
+    var isPaused: Boolean = false
+        private set
+
+    /** Appelé quand la lecture se termine (ou est annulée) — pour resynchroniser l'UI. */
+    var onFinished: (() -> Unit)? = null
+
     /** Voix disponibles, françaises en premier. */
     val voices: List<TtsVoice>
         get() = (tts.voices ?: emptySet())
@@ -45,6 +58,22 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
             tts.language = Locale.FRENCH
             applySelectedVoice()
             tts.setSpeechRate(speed) // écrase le réglage système → vitesse contrôlée par l'app
+            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(id: String?) {}
+
+                override fun onDone(id: String?) {
+                    playNext()
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(id: String?) {
+                    playNext()
+                }
+
+                override fun onError(id: String?, errorCode: Int) {
+                    playNext()
+                }
+            })
             pending?.let { speak(it) }
             pending = null
         }
@@ -72,15 +101,65 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
         tts.voices?.firstOrNull { it.name == name }?.let { tts.setVoice(it) }
     }
 
+    /** Lit un texte, découpé en phrases pour permettre la pause/reprise. */
     fun speak(text: String) {
-        if (ready) {
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "guide")
-        } else {
+        if (!ready) {
             pending = text
+            return
         }
+        phrases.clear()
+        phrases.addAll(splitPhrases(text))
+        phraseIndex = 0
+        paused = false
+        isPaused = false
+        playNext()
     }
 
-    fun stop() = tts.stop()
+    /** Pause : coupe à la fin de la phrase en cours. */
+    fun pause() {
+        if (phrases.isEmpty() || paused) return
+        paused = true
+        isPaused = true
+        tts.stop() // la phrase en cours n'appelle PAS onDone → reprise à cette phrase
+    }
+
+    /** Reprise : continue à la phrase suivante. */
+    fun resume() {
+        if (!paused) return
+        paused = false
+        isPaused = false
+        playNext()
+    }
+
+    /** Bascule pause/reprise. Retourne le nouvel état (true = en pause). */
+    fun togglePause(): Boolean {
+        if (paused) resume() else pause()
+        return paused
+    }
+
+    fun stop() {
+        paused = false
+        isPaused = false
+        phraseIndex = phrases.size
+        phrases.clear()
+        tts.stop()
+    }
+
+    private fun splitPhrases(text: String): List<String> =
+        text.split(Regex("(?<=[.!?…])\\s+")).filter { it.isNotBlank() }
+
+    private fun playNext() {
+        if (paused) return
+        if (phraseIndex < phrases.size) {
+            tts.speak(phrases[phraseIndex], TextToSpeech.QUEUE_FLUSH, null, "guide_$phraseIndex")
+            phraseIndex++
+        } else {
+            // Fin de lecture
+            paused = false
+            isPaused = false
+            onFinished?.invoke()
+        }
+    }
 
     fun shutdown() {
         tts.stop()

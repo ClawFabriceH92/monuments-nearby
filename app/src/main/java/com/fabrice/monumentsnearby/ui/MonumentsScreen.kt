@@ -3,6 +3,7 @@ package com.fabrice.monumentsnearby.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +27,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import kotlin.math.roundToInt
 
@@ -68,6 +73,8 @@ fun MonumentsScreen(
     var showVoiceDialog by remember { mutableStateOf(false) }
     var showMuseumDialog by remember { mutableStateOf(false) }
     var showCityDialog by remember { mutableStateOf(false) }
+    var selectedMonument by remember { mutableStateOf<Monument?>(null) }
+    val paused = remember { mutableStateOf(false) }
 
     // Titre conservé pendant le chargement
     var lastTitle by remember { mutableStateOf("Monuments à proximité") }
@@ -77,6 +84,12 @@ fun MonumentsScreen(
     }
     val isMuseumMode = success?.mode == AppMode.MUSEUM
     if (isMuseumMode) showMap = false
+
+    // Resynchronise le bouton pause quand la lecture se termine
+    DisposableEffect(Unit) {
+        speaker.onFinished = { paused.value = false }
+        onDispose { speaker.shutdown() }
+    }
 
     Scaffold(
         topBar = {
@@ -104,12 +117,33 @@ fun MonumentsScreen(
                             )
                         }
                     }
+                    // Pause / reprise de l'audioguide
+                    TextButton(onClick = { paused.value = speaker.togglePause() }) {
+                        Text(
+                            text = if (paused.value) "▶️" else "⏸️",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
                     // Choix de la voix et de la vitesse de l'audioguide
                     TextButton(onClick = { showVoiceDialog = true }) {
                         Text("🔊", style = MaterialTheme.typography.titleLarge)
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            // Sur la carte : charger les musées de la zone visible
+            if (showMap && !isMuseumMode) {
+                ExtendedFloatingActionButton(
+                    text = { Text("🏛️ Musées ici") },
+                    icon = {},
+                    onClick = {
+                        val s = state as? UiState.Success ?: return@ExtendedFloatingActionButton
+                        viewModel.loadMuseumsInZone(s.lat, s.lon)
+                        showMap = false
+                    }
+                )
+            }
         }
     ) { padding ->
         Box(
@@ -166,7 +200,8 @@ fun MonumentsScreen(
                                     MonumentCard(
                                         monument = monument,
                                         onListen = { speaker.speak(guideText(monument)) },
-                                        onNavigate = { openMaps(context, monument) }
+                                        onNavigate = { openMaps(context, monument) },
+                                        onCardClick = { selectedMonument = monument }
                                     )
                                 }
                             }
@@ -176,7 +211,8 @@ fun MonumentsScreen(
                                     MonumentCard(
                                         monument = monument,
                                         onListen = { speaker.speak(guideText(monument)) },
-                                        onNavigate = { openMaps(context, monument) }
+                                        onNavigate = { openMaps(context, monument) },
+                                        onCardClick = { selectedMonument = monument }
                                     )
                                 }
                             }
@@ -195,6 +231,32 @@ fun MonumentsScreen(
     }
     if (showVoiceDialog) {
         VoiceDialog(speaker = speaker, onDismiss = { showVoiceDialog = false })
+    }
+    selectedMonument?.let { monument ->
+        MonumentDetailDialog(
+            monument = monument,
+            viewModel = viewModel,
+            onDismiss = {
+                selectedMonument = null
+                viewModel.clearMonumentImages()
+            },
+            onListen = { speaker.speak(guideText(monument)) },
+            onViewWorks = {
+                val qid = monument.wikidataId ?: return@MonumentDetailDialog
+                viewModel.loadMuseumArtworks(
+                    WikidataClient.Museum(
+                        qid = qid,
+                        name = monument.name,
+                        description = monument.description,
+                        imageUrl = monument.imageUrl,
+                        lat = monument.lat,
+                        lon = monument.lon
+                    )
+                )
+                selectedMonument = null
+                viewModel.clearMonumentImages()
+            }
+        )
     }
 }
 
@@ -484,9 +546,14 @@ private fun CenteredMessage(message: String, action: @Composable () -> Unit) {
 private fun MonumentCard(
     monument: Monument,
     onListen: () -> Unit,
-    onNavigate: () -> Unit
+    onNavigate: () -> Unit,
+    onCardClick: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onCardClick)
+    ) {
         Column(Modifier.padding(14.dp)) {
             monument.imageUrl?.let { url ->
                 AsyncImage(
@@ -522,7 +589,7 @@ private fun MonumentCard(
                 )
                 monument.inception?.let {
                     Text(
-                        text = "Construit en $it",
+                        text = if (monument.artist != null) "📅 $it" else "Construit en $it",
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -551,6 +618,117 @@ private fun MonumentCard(
             }
         }
     }
+}
+
+/**
+ * Détail d'un monument : texte complet, infos, galerie d'images Commons,
+ * et accès aux œuvres si c'est un musée.
+ */
+@Composable
+private fun MonumentDetailDialog(
+    monument: Monument,
+    viewModel: MonumentsViewModel,
+    onDismiss: () -> Unit,
+    onListen: () -> Unit,
+    onViewWorks: () -> Unit
+) {
+    val images by viewModel.monumentImages.collectAsStateWithLifecycle()
+    val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
+
+    val isMuseum = monument.kind.lowercase().contains("musée") ||
+            monument.kind.lowercase().contains("museum")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(monument.name, style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                monument.imageUrl?.let { url ->
+                    AsyncImage(
+                        model = url,
+                        contentDescription = monument.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row {
+                    Text(
+                        text = monument.kind.replace('_', ' '),
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    monument.inception?.let {
+                        Text(
+                            text = if (monument.artist != null) "📅 $it" else "Construit en $it",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+                monument.artist?.let { artist ->
+                    Text(
+                        text = "🎨 $artist",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = monument.description ?: "Aucune description disponible.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                // Galerie d'images (catégorie Commons du monument)
+                if (loadingImages && images.isEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    SearchRow()
+                } else if (images.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Photos",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(images) { url ->
+                            AsyncImage(
+                                model = url,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(120.dp)
+                                    .clip(RoundedCornerShape(6.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+
+                if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onViewWorks,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("🏛️ Voir les œuvres de ce musée") }
+                }
+            }
+        },
+        confirmButton = {
+            Row {
+                OutlinedButton(onClick = onListen) { Text("🔊 Écouter") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { openMaps(context, monument) }) { Text("Itinéraire") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
+        }
+    )
 }
 
 private fun formatDistance(m: Double): String =

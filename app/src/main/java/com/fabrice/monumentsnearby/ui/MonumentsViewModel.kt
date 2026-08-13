@@ -52,6 +52,13 @@ class MonumentsViewModel : ViewModel() {
     private val _searching = MutableStateFlow(false)
     val searching: StateFlow<Boolean> = _searching
 
+    /** Images de la galerie Commons du monument sélectionné. */
+    private val _monumentImages = MutableStateFlow<List<String>>(emptyList())
+    val monumentImages: StateFlow<List<String>> = _monumentImages
+
+    private val _loadingImages = MutableStateFlow(false)
+    val loadingImages: StateFlow<Boolean> = _loadingImages
+
     /** Monuments autour de la position GPS (mode MONUMENTS). */
     fun load(lat: Double, lon: Double) {
         _state.value = UiState.Loading
@@ -150,6 +157,50 @@ class MonumentsViewModel : ViewModel() {
                 UiState.Error(e.message ?: "Erreur inconnue")
             }
         }
+    }
+
+    /** Musées visibles autour du centre de la carte (bouton « musées de la zone »). */
+    fun loadMuseumsInZone(lat: Double, lon: Double, radiusM: Int = 3000) {
+        _state.value = UiState.Loading
+        viewModelScope.launch {
+            _state.value = try {
+                val raw = OverpassClient.fetchMuseums(lat, lon, radiusM)
+                var enriched = WikidataClient.enrich(raw)
+                enriched = WikipediaClient.enrich(enriched)
+                UiState.Success(enriched, lat, lon, AppMode.MUSEUM, "Musées dans la zone")
+            } catch (e: Exception) {
+                UiState.Error(e.message ?: "Erreur inconnue")
+            }
+        }
+    }
+
+    /** Charge la galerie Commons du monument sélectionné (P373 → catégorie). */
+    fun loadMonumentImages(monument: Monument) {
+        if (_loadingImages.value) return
+        _loadingImages.value = true
+        viewModelScope.launch {
+            _monumentImages.value = try {
+                // 1) Images directes de la catégorie Commons (P373)
+                val category = monument.commonsCategory
+                val fromCategory = category?.let { WikidataClient.fetchCommonsCategoryImages(it) }
+                    ?: emptyList()
+                // 2) Plan B : recherche d'images par titre (Wikipédia ou nom)
+                if (fromCategory.isNotEmpty()) {
+                    fromCategory
+                } else {
+                    val query = monument.wikipediaTitle ?: monument.name
+                    WikidataClient.fetchCommonsSearchImages(query)
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            _loadingImages.value = false
+        }
+    }
+
+    fun clearMonumentImages() {
+        _monumentImages.value = emptyList()
+        _loadingImages.value = false
     }
 
     fun onPermissionDenied() {

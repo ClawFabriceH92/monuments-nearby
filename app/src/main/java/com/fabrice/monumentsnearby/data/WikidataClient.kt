@@ -203,12 +203,27 @@ object WikidataClient {
             }
         }
 
+        // Catégorie Commons (P373) → galerie d'images du monument
+        var commonsCategory: String? = null
+        val p373 = claims?.optJSONArray("P373")
+        if (p373 != null) {
+            for (i in 0 until p373.length()) {
+                val cat = p373.getJSONObject(i).optJSONObject("mainsnak")
+                    ?.optJSONObject("datavalue")?.optString("value")
+                if (!cat.isNullOrBlank()) {
+                    commonsCategory = cat
+                    break
+                }
+            }
+        }
+
         return m.copy(
             name = label ?: m.name,
             kind = typeLabel ?: m.kind,
             description = desc ?: m.description,
             imageUrl = imageUrl ?: m.imageUrl,
             inception = inception,
+            commonsCategory = commonsCategory,
             wikipediaTitle = wikiTitle ?: m.wikipediaTitle
         )
     }
@@ -355,4 +370,74 @@ object WikidataClient {
         val year = time.trimStart('+').takeWhile { it != '-' }
         return year.takeIf { it.isNotBlank() }
     }
+
+    // ---------------------------------------------------------------
+    // Galerie d'images — catégorie Wikimedia Commons du monument (P373)
+    // ---------------------------------------------------------------
+
+    /**
+     * Images d'une catégorie Wikimedia Commons (API categorymembers).
+     * Pagine à travers les membres (les sous-catégories viennent en premier
+     * dans le tri alphabétique) jusqu'à obtenir [limit] fichiers image.
+     */
+    suspend fun fetchCommonsCategoryImages(category: String, limit: Int = 10): List<String> =
+        withContext(Dispatchers.IO) {
+            if (category.isBlank()) return@withContext emptyList()
+            val images = mutableListOf<String>()
+            var cmcontinue: String? = null
+            var contContinue: String? = null
+            var guard = 0
+
+            do {
+                val url = "https://commons.wikimedia.org/w/api.php?action=query" +
+                        "&list=categorymembers&cmtitle=Category:${URLEncoder.encode(category, "UTF-8")}" +
+                        "&cmtype=file&cmlimit=50&format=json" +
+                        (cmcontinue?.let { "&cmcontinue=${URLEncoder.encode(it, "UTF-8")}" } ?: "") +
+                        (contContinue?.let { "&continue=${URLEncoder.encode(it, "UTF-8")}" } ?: "")
+                val root = getJson(url)
+                val members = root.optJSONObject("query")?.optJSONArray("categorymembers")
+                    ?: break
+                for (i in 0 until members.length()) {
+                    val title = members.getJSONObject(i).optString("title")
+                        .takeIf { it.isNotBlank() } ?: continue
+                    // title = "File:X.jpg" → URL Special:FilePath dimensionnée
+                    val encoded = URLEncoder.encode(title.removePrefix("File:").replace(' ', '_'), "UTF-8")
+                        .replace("+", "%20")
+                    images += "https://commons.wikimedia.org/wiki/Special:FilePath/$encoded?width=400"
+                }
+                val cont = root.optJSONObject("continue")
+                cmcontinue = cont?.optString("cmcontinue")?.takeIf { it.isNotBlank() }
+                contContinue = cont?.optString("continue")?.takeIf { it.isNotBlank() }
+                guard++
+            } while (cmcontinue != null && images.size < limit && guard < 8)
+
+            images.take(limit)
+        }
+
+    /**
+     * Recherche d'images dans Wikimedia Commons par texte (recherche dans les
+     * titres de fichiers, `filetype:bitmap` exclut vidéos/audio).
+     * Plan B quand la catégorie P373 ne contient que des sous-catégories.
+     */
+    suspend fun fetchCommonsSearchImages(query: String, limit: Int = 10): List<String> =
+        withContext(Dispatchers.IO) {
+            if (query.isBlank()) return@withContext emptyList()
+            val url = "https://commons.wikimedia.org/w/api.php?action=query&generator=search" +
+                    "&gsrsearch=${URLEncoder.encode("filetype:bitmap \"$query\"", "UTF-8")}" +
+                    "&gsrnamespace=6&gsrlimit=$limit&prop=imageinfo&iiprop=url&iiurlwidth=400&format=json"
+            val root = getJson(url)
+            val pages = root.optJSONObject("query")?.optJSONObject("pages")
+                ?: return@withContext emptyList()
+
+            val images = mutableListOf<String>()
+            val keys = pages.keys()
+            while (keys.hasNext()) {
+                val page = pages.getJSONObject(keys.next())
+                val ii = page.optJSONArray("imageinfo")?.optJSONObject(0) ?: continue
+                val thumb = ii.optString("thumburl").takeIf { it.isNotBlank() }
+                    ?: ii.optString("url").takeIf { it.isNotBlank() } ?: continue
+                images += thumb
+            }
+            images
+        }
 }

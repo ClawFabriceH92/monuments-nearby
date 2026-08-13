@@ -15,7 +15,9 @@ import java.util.concurrent.TimeUnit
  */
 object WikipediaClient {
 
-    private const val MAX_SUMMARY_CHARS = 350
+    /** Résumé suffisamment long pour un dialogue « tout le texte » (affichage
+     *  carte tronqué à 3 lignes, mais le texte complet est conservé). */
+    private const val MAX_SUMMARY_CHARS = 2000
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
