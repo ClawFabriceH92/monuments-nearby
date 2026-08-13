@@ -23,6 +23,14 @@ data class Monument(
     val artist: String? = null,
     /** Catégorie Wikimedia Commons (P373) — pour la galerie d'images. */
     val commonsCategory: String? = null,
+    /** Architecte (P84). */
+    val architect: String? = null,
+    /** Style architectural (P149). */
+    val style: String? = null,
+    /** Matériau principal (P186). */
+    val material: String? = null,
+    /** Classement patrimonial (P1435), ex: « Monument historique classé ». */
+    val heritage: String? = null,
     /** true si monument majeur (article Wikipédia dédié ou type important). */
     val important: Boolean = false
 )

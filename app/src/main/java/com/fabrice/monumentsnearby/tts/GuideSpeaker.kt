@@ -143,6 +143,7 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
         phraseIndex = phrases.size
         phrases.clear()
         tts.stop()
+        onFinished?.invoke() // permet à l'UI de cacher la barre de lecture
     }
 
     private fun splitPhrases(text: String): List<String> =

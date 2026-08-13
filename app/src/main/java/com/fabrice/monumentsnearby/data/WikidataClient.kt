@@ -109,13 +109,17 @@ object WikidataClient {
 
     private suspend fun fetchTypeLabels(entities: Map<String, JSONObject>): Map<String, String> {
         val typeIds = LinkedHashSet<String>()
+        // P31 = type, P84 = architecte, P149 = style, P186 = matériau, P1435 = classement
+        val props = listOf("P31", "P84", "P149", "P186", "P1435")
         for (entity in entities.values) {
-            val p31 = entity.optJSONObject("claims")?.optJSONArray("P31") ?: continue
-            for (i in 0 until p31.length()) {
-                val value = p31.getJSONObject(i).optJSONObject("mainsnak")
-                    ?.optJSONObject("datavalue")?.optJSONObject("value")
-                if (value?.optString("entity-type") == "item") {
-                    value.optString("id").takeIf { it.isNotBlank() }?.let { typeIds.add(it) }
+            for (prop in props) {
+                val arr = entity.optJSONObject("claims")?.optJSONArray(prop) ?: continue
+                for (i in 0 until arr.length()) {
+                    val value = arr.getJSONObject(i).optJSONObject("mainsnak")
+                        ?.optJSONObject("datavalue")?.optJSONObject("value")
+                    if (value?.optString("entity-type") == "item") {
+                        value.optString("id").takeIf { it.isNotBlank() }?.let { typeIds.add(it) }
+                    }
                 }
             }
         }
@@ -217,6 +221,12 @@ object WikidataClient {
             }
         }
 
+        // Richesses supplémentaires : architecte, style, matériau, classement
+        val architect = firstItemLabel(claims, "P84", typeLabels)
+        val style = firstItemLabel(claims, "P149", typeLabels)
+        val material = firstItemLabel(claims, "P186", typeLabels)
+        val heritage = firstItemLabel(claims, "P1435", typeLabels)
+
         return m.copy(
             name = label ?: m.name,
             kind = typeLabel ?: m.kind,
@@ -224,8 +234,30 @@ object WikidataClient {
             imageUrl = imageUrl ?: m.imageUrl,
             inception = inception,
             commonsCategory = commonsCategory,
+            architect = architect,
+            style = style,
+            material = material,
+            heritage = heritage,
             wikipediaTitle = wikiTitle ?: m.wikipediaTitle
         )
+    }
+
+    /** Premier label FR d'une propriété de type « item » (P84, P149…). */
+    private fun firstItemLabel(
+        claims: JSONObject?,
+        prop: String,
+        typeLabels: Map<String, String>
+    ): String? {
+        val arr = claims?.optJSONArray(prop) ?: return null
+        for (i in 0 until arr.length()) {
+            val value = arr.getJSONObject(i).optJSONObject("mainsnak")
+                ?.optJSONObject("datavalue")?.optJSONObject("value")
+            if (value?.optString("entity-type") == "item") {
+                val resolved = typeLabels[value.optString("id")]
+                if (resolved != null) return resolved
+            }
+        }
+        return null
     }
 
     private suspend fun getJson(url: String): JSONObject {
@@ -253,9 +285,40 @@ object WikidataClient {
     /** QID du type « musée ». */
     private const val Q_MUSEUM = "Q33506"
 
+    /** Cache des types « musée » (Q33506 + toutes ses sous-classes P279*). */
+    private var museumTypeIds: Set<String>? = null
+
+    /**
+     * Types considérés comme musées : Q33506 et toutes ses sous-classes
+     * (musée d'art Q207694, musée d'histoire Q5634836…). Le Musée du Louvre
+     * est par exemple typé « musée d'art » et pas « musée » directement.
+     */
+    private suspend fun museumTypes(): Set<String> {
+        museumTypeIds?.let { return it }
+        val ids = mutableSetOf(Q_MUSEUM)
+        try {
+            val sparql = "SELECT ?type WHERE { ?type wdt:P279* wd:$Q_MUSEUM . }"
+            val url = "https://query.wikidata.org/sparql?query=" +
+                    URLEncoder.encode(sparql, "UTF-8") + "&format=json"
+            val root = getJson(url)
+            val bindings = root.optJSONObject("results")?.optJSONArray("bindings")
+            if (bindings != null) {
+                for (i in 0 until bindings.length()) {
+                    val type = bindings.getJSONObject(i).optJSONObject("type")
+                        ?.optString("value")?.substringAfterLast('/')
+                    if (!type.isNullOrBlank()) ids.add(type)
+                }
+            }
+        } catch (e: Exception) {
+            // cache réduit à Q33506 en cas d'échec
+        }
+        museumTypeIds = ids
+        return ids
+    }
+
     /**
      * Recherche un musée par nom (wbsearchentities), filtré sur le type
-     * « musée » (P31 = Q33506). Idéal pour la barre de recherche.
+     * « musée » (P31 = Q33506 ou sous-classe). Idéal pour la barre de recherche.
      */
     suspend fun searchMuseums(query: String, limit: Int = 8): List<Museum> =
         withContext(Dispatchers.IO) {
@@ -281,17 +344,19 @@ object WikidataClient {
             if (ids.isEmpty()) return@withContext emptyList()
 
             // Filtrer : garder uniquement les entités de type « musée »
+            val valid = museumTypes()
             val entities = fetchEntities(ids)
-            pending.filter { isMuseumType(entities[it.qid]) }
+            pending.filter { isMuseumType(entities[it.qid], valid) }
         }
 
-    private fun isMuseumType(entity: JSONObject?): Boolean {
+    private fun isMuseumType(entity: JSONObject?, validTypes: Set<String>): Boolean {
         if (entity == null) return false
         val p31 = entity.optJSONObject("claims")?.optJSONArray("P31") ?: return false
         for (i in 0 until p31.length()) {
             val value = p31.getJSONObject(i).optJSONObject("mainsnak")
                 ?.optJSONObject("datavalue")?.optJSONObject("value")
-            if (value?.optString("id") == Q_MUSEUM) return true
+            if (value?.optString("entity-type") == "item" &&
+                validTypes.contains(value.optString("id"))) return true
         }
         return false
     }

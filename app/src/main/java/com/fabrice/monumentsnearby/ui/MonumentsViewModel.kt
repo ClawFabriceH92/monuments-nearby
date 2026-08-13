@@ -59,11 +59,16 @@ class MonumentsViewModel : ViewModel() {
     private val _loadingImages = MutableStateFlow(false)
     val loadingImages: StateFlow<Boolean> = _loadingImages
 
+    /** Dernier résultat « autour de moi » (monuments GPS) — conservé quand on
+     *  passe en mode musée/ville, pour ne pas perdre la vue position. */
+    private val _lastMonuments = MutableStateFlow<UiState.Success?>(null)
+    val lastMonuments: StateFlow<UiState.Success?> = _lastMonuments
+
     /** Monuments autour de la position GPS (mode MONUMENTS). */
     fun load(lat: Double, lon: Double) {
         _state.value = UiState.Loading
         viewModelScope.launch {
-            _state.value = try {
+            val result = try {
                 val raw = OverpassClient.fetchMonuments(lat, lon)
                 var enriched = WikidataClient.enrich(raw) // ontologie + types + photos
                 enriched = WikipediaClient.enrich(enriched) // résumés d'articles
@@ -71,6 +76,8 @@ class MonumentsViewModel : ViewModel() {
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")
             }
+            if (result is UiState.Success) _lastMonuments.value = result
+            _state.value = result
         }
     }
 

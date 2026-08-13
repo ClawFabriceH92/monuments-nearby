@@ -35,12 +35,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,6 +80,7 @@ fun MonumentsScreen(
     var showVoiceDialog by remember { mutableStateOf(false) }
     var selectedMonument by remember { mutableStateOf<Monument?>(null) }
     val paused = remember { mutableStateOf(false) }
+    val speakerActive = remember { mutableStateOf(false) }
     var selectedMuseum by remember { mutableStateOf<WikidataClient.Museum?>(null) }
     var showMuseumSearch by remember { mutableStateOf(true) }
 
@@ -89,7 +92,10 @@ fun MonumentsScreen(
     val isMuseumMode = success?.mode == AppMode.MUSEUM
 
     DisposableEffect(Unit) {
-        speaker.onFinished = { paused.value = false }
+        speaker.onFinished = {
+            paused.value = false
+            speakerActive.value = false
+        }
         onDispose { speaker.shutdown() }
     }
 
@@ -101,7 +107,10 @@ fun MonumentsScreen(
                 selectedMonument = null
                 viewModel.clearMonumentImages()
             },
-            onListen = { speaker.speak(guideText(selectedMonument!!)) },
+            onListen = {
+                speakerActive.value = true
+                speaker.speak(guideText(selectedMonument!!))
+            },
             onViewWorks = {
                 val qid = selectedMonument!!.wikidataId ?: return@MonumentDetailScreen
                 val museum = WikidataClient.Museum(
@@ -118,6 +127,15 @@ fun MonumentsScreen(
                 selectedMonument = null
                 viewModel.clearMonumentImages()
                 viewModel.loadMuseumArtworks(museum)
+            },
+            lectureBar = {
+                if (speakerActive.value) {
+                    LectureBar(
+                        paused = paused.value,
+                        onTogglePause = { paused.value = speaker.togglePause() },
+                        onStop = { speaker.stop() }
+                    )
+                }
             }
         )
     } else {
@@ -134,35 +152,43 @@ fun MonumentsScreen(
                         )
                     },
                     actions = {
-                        TextButton(onClick = { paused.value = speaker.togglePause() }) {
-                            Text(if (paused.value) "▶ Reprendre" else "⏸ Pause")
-                        }
+                        // Réglages de l'audioguide (voix + vitesse)
                         TextButton(onClick = { showVoiceDialog = true }) {
-                            Text("Voix")
+                            Text("⚙️")
                         }
                     }
                 )
             },
             bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = selectedTab == AppTab.AROUND,
-                        onClick = { selectedTab = AppTab.AROUND },
-                        icon = { Text("📍") },
-                        label = { Text("Autour de moi") }
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == AppTab.MUSEUMS,
-                        onClick = { selectedTab = AppTab.MUSEUMS },
-                        icon = { Text("🏛") },
-                        label = { Text("Musées") }
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == AppTab.CITY,
-                        onClick = { selectedTab = AppTab.CITY },
-                        icon = { Text("🏙") },
-                        label = { Text("Ville") }
-                    )
+                Column {
+                    // Barre de lecture flottante, visible seulement pendant l'écoute
+                    if (speakerActive.value) {
+                        LectureBar(
+                            paused = paused.value,
+                            onTogglePause = { paused.value = speaker.togglePause() },
+                            onStop = { speaker.stop() }
+                        )
+                    }
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = selectedTab == AppTab.AROUND,
+                            onClick = { selectedTab = AppTab.AROUND },
+                            icon = { Text("📍") },
+                            label = { Text("Autour de moi") }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == AppTab.MUSEUMS,
+                            onClick = { selectedTab = AppTab.MUSEUMS },
+                            icon = { Text("🏛") },
+                            label = { Text("Musées") }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == AppTab.CITY,
+                            onClick = { selectedTab = AppTab.CITY },
+                            icon = { Text("🏙") },
+                            label = { Text("Ville") }
+                        )
+                    }
                 }
             },
             floatingActionButton = {
@@ -192,6 +218,7 @@ fun MonumentsScreen(
                         state = state,
                         viewModel = viewModel,
                         speaker = speaker,
+                        speakerActive = speakerActive,
                         context = context,
                         showMap = showMap,
                         onToggleMap = { showMap = !showMap },
@@ -209,14 +236,20 @@ fun MonumentsScreen(
                             viewModel.loadMuseumArtworks(museum)
                         },
                         onSelectMonument = { selectedMonument = it },
-                        onListen = { speaker.speak(guideText(it)) },
+                        onListen = {
+                            speakerActive.value = true
+                            speaker.speak(guideText(it))
+                        },
                         onNavigate = { openMaps(context, it) }
                     )
                     AppTab.CITY -> CityContent(
                         state = state,
                         viewModel = viewModel,
                         onSelectMonument = { selectedMonument = it },
-                        onListen = { speaker.speak(guideText(it)) },
+                        onListen = {
+                            speakerActive.value = true
+                            speaker.speak(guideText(it))
+                        },
                         onNavigate = { openMaps(context, it) }
                     )
                 }
@@ -229,53 +262,70 @@ fun MonumentsScreen(
     }
 }
 
+/**
+ * Barre de lecture flottante de l'audioguide : pause/reprise + arrêt.
+ * Affichée seulement quand une lecture est active ou en pause.
+ */
+@Composable
+private fun LectureBar(
+    paused: Boolean,
+    onTogglePause: () -> Unit,
+    onStop: () -> Unit
+) {
+    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("🔊 Audioguide", style = MaterialTheme.typography.labelLarge)
+            Row {
+                TextButton(onClick = onTogglePause) {
+                    Text(if (paused) "▶ Reprendre" else "⏸ Pause")
+                }
+                TextButton(onClick = onStop) { Text("✕ Arrêter") }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AroundContent(
     state: UiState,
     viewModel: MonumentsViewModel,
     speaker: GuideSpeaker,
+    speakerActive: MutableState<Boolean>,
     context: Context,
     showMap: Boolean,
     onToggleMap: () -> Unit,
     onSelectMonument: (Monument) -> Unit,
     onLocate: () -> Unit
 ) {
-    when (state) {
-        is UiState.Idle -> CenteredMessage("Appuie pour détecter les monuments autour de toi") {
-            Button(onClick = onLocate) { Text("📍 Détecter ma position") }
-        }
+    val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
+    // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
+    val effective = when (state) {
+        is UiState.Success ->
+            if (state.mode == AppMode.MONUMENTS) state else lastMonuments
+        else -> null
+    }
 
-        is UiState.Loading -> Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            CircularProgressIndicator()
-            Text("Recherche…")
-        }
-
-        is UiState.Error -> CenteredMessage(state.message) {
-            Button(onClick = onLocate) { Text("Réessayer") }
-        }
-
-        is UiState.Success -> {
-            if (state.mode != AppMode.MONUMENTS) {
-                CenteredMessage("Appuie pour détecter les monuments autour de toi") {
-                    Button(onClick = onLocate) { Text("📍 Détecter ma position") }
-                }
-            } else if (state.monuments.isEmpty()) {
+    when {
+        effective != null -> {
+            if (effective.monuments.isEmpty()) {
                 CenteredMessage("Aucun monument trouvé à proximité.") {
                     Button(onClick = onLocate) { Text("📍 Réessayer") }
                 }
             } else if (showMap) {
                 MonumentsMap(
-                    monuments = state.monuments,
-                    centerLat = state.lat,
-                    centerLon = state.lon
+                    monuments = effective.monuments,
+                    centerLat = effective.lat,
+                    centerLon = effective.lon
                 )
             } else {
-                val majors = state.monuments.filter { it.important }
-                val others = state.monuments.filter { !it.important }
+                val majors = effective.monuments.filter { it.important }
+                val others = effective.monuments.filter { !it.important }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(12.dp),
@@ -288,7 +338,7 @@ private fun AroundContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "${state.monuments.size} monuments trouvés",
+                                "${effective.monuments.size} monuments trouvés",
                                 style = MaterialTheme.typography.labelMedium
                             )
                             TextButton(onClick = onToggleMap) {
@@ -301,7 +351,10 @@ private fun AroundContent(
                         items(majors, key = { it.id }) { monument ->
                             MonumentCard(
                                 monument = monument,
-                                onListen = { speaker.speak(guideText(monument)) },
+                                onListen = {
+                                    speakerActive.value = true
+                                    speaker.speak(guideText(monument))
+                                },
                                 onNavigate = { openMaps(context, monument) },
                                 onCardClick = { onSelectMonument(monument) }
                             )
@@ -312,7 +365,10 @@ private fun AroundContent(
                         items(others, key = { it.id }) { monument ->
                             MonumentCard(
                                 monument = monument,
-                                onListen = { speaker.speak(guideText(monument)) },
+                                onListen = {
+                                    speakerActive.value = true
+                                    speaker.speak(guideText(monument))
+                                },
                                 onNavigate = { openMaps(context, monument) },
                                 onCardClick = { onSelectMonument(monument) }
                             )
@@ -320,6 +376,20 @@ private fun AroundContent(
                     }
                 }
             }
+        }
+        state is UiState.Loading -> Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator()
+            Text("Recherche…")
+        }
+        state is UiState.Error -> CenteredMessage(state.message) {
+            Button(onClick = onLocate) { Text("Réessayer") }
+        }
+        else -> CenteredMessage("Appuie pour détecter les monuments autour de toi") {
+            Button(onClick = onLocate) { Text("📍 Détecter ma position") }
         }
     }
 }
@@ -578,7 +648,8 @@ private fun MonumentDetailScreen(
     viewModel: MonumentsViewModel,
     onClose: () -> Unit,
     onListen: () -> Unit,
-    onViewWorks: () -> Unit
+    onViewWorks: () -> Unit,
+    lectureBar: @Composable () -> Unit
 ) {
     val images by viewModel.monumentImages.collectAsStateWithLifecycle()
     val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
@@ -596,7 +667,8 @@ private fun MonumentDetailScreen(
                     TextButton(onClick = onClose) { Text("← Retour") }
                 }
             )
-        }
+        },
+        bottomBar = { lectureBar() }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -635,6 +707,23 @@ private fun MonumentDetailScreen(
                     text = "🎨 $artist",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            monument.architect?.let {
+                Text("👷 Architecte : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.style?.let {
+                Text("🏛 Style : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.material?.let {
+                Text("🧱 Matériau : $it", style = MaterialTheme.typography.bodyMedium)
+            }
+            monument.heritage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "🏅 $it",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
             Spacer(Modifier.height(10.dp))
