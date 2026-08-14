@@ -3,6 +3,7 @@ package com.fabrice.monumentsnearby.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -53,16 +55,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.fabrice.monumentsnearby.data.Monument
-import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.data.WikidataClient
+import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
+import com.fabrice.monumentsnearby.ui.theme.CategoryColors
 import kotlin.math.roundToInt
 
 enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
@@ -170,6 +176,10 @@ fun MonumentsScreen(
                             }
                         )
                     },
+                    colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = Color.White
+                    ),
                     actions = {
                         // Alerte monuments à proximité (géofencing)
                         val geofencesActive by viewModel.geofencesActive.collectAsStateWithLifecycle()
@@ -193,7 +203,7 @@ fun MonumentsScreen(
                             onStop = { speaker.stop() }
                         )
                     }
-                    NavigationBar {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                         NavigationBarItem(
                             selected = selectedTab == AppTab.AROUND,
                             onClick = { selectedTab = AppTab.AROUND },
@@ -902,10 +912,15 @@ private fun MonumentDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(monument.name, style = MaterialTheme.typography.titleMedium) },
+                title = { Text("") },
                 navigationIcon = {
                     TextButton(onClick = onClose) { Text("← Retour") }
-                }
+                },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    navigationIconContentColor = Color.White,
+                    titleContentColor = Color.White
+                )
             )
         },
         bottomBar = { lectureBar() }
@@ -915,20 +930,62 @@ private fun MonumentDetailScreen(
                 .padding(padding)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp)
         ) {
-            monument.imageUrl?.let { url ->
-                AsyncImage(
-                    model = url,
-                    contentDescription = monument.name,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .clip(RoundedCornerShape(12.dp)),
-                    contentScale = ContentScale.Crop
+            // En-tête : grande image avec dégradé et titre par-dessus
+            val headerImage = monument.imageUrl
+            if (headerImage != null) {
+                Box {
+                    AsyncImage(
+                        model = headerImage,
+                        contentDescription = monument.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(250.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color(0xE6000000)),
+                                    endY = 1000f
+                                )
+                            )
+                    )
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(16.dp)
+                    ) {
+                        val cat = monument.category()
+                        Surface(
+                            color = CategoryColors.forCategory(cat),
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                cat.replaceFirstChar { it.uppercase() },
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            monument.name,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = Color.White
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    monument.name,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(16.dp)
                 )
-                Spacer(Modifier.height(12.dp))
             }
+            Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = monument.kind.replace('_', ' '),
@@ -1042,6 +1099,7 @@ private fun MonumentDetailScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("🏛️ Voir les œuvres de ce musée") }
             }
+        }
         }
     }
 }
@@ -1167,7 +1225,18 @@ private fun CenteredMessage(message: String, action: @Composable () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(message, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "🏛",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+            fontSize = 56.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            message,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
         Spacer(Modifier.height(16.dp))
         action()
     }
@@ -1180,72 +1249,120 @@ private fun MonumentCard(
     onNavigate: () -> Unit,
     onCardClick: () -> Unit
 ) {
+    val category = monument.category()
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onCardClick)
+            .clickable(onClick = onCardClick),
+        shape = RoundedCornerShape(18.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(Modifier.padding(14.dp)) {
-            monument.imageUrl?.let { url ->
-                AsyncImage(
-                    model = url,
-                    contentDescription = monument.name,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
-                        .clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(Modifier.height(10.dp))
+        Column {
+            if (monument.imageUrl != null) {
+                Box {
+                    AsyncImage(
+                        model = monument.imageUrl,
+                        contentDescription = monument.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(170.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                    Surface(
+                        color = CategoryColors.forCategory(category).copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = category.replaceFirstChar { it.uppercase() },
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (monument.distanceM > 0) {
+                        Surface(
+                            color = Color(0xCC000000),
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = formatDistance(monument.distanceM),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.padding(14.dp)) {
+                if (monument.imageUrl == null) {
+                    Surface(
+                        color = CategoryColors.forCategory(category).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = category.replaceFirstChar { it.uppercase() },
+                            color = CategoryColors.forCategory(category),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text(
                     text = monument.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
+                    style = MaterialTheme.typography.titleMedium
                 )
-                if (monument.distanceM > 0) {
+                Row(Modifier.padding(top = 2.dp)) {
                     Text(
-                        text = formatDistance(monument.distanceM),
+                        text = monument.kind.replace('_', ' '),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    monument.inception?.let {
+                        Text(
+                            text = if (monument.artist != null) "📅 $it" else "Construit en $it",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                monument.artist?.let { artist ->
+                    Text(
+                        text = "🎨 $artist",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.secondary
                     )
                 }
-            }
-            Row {
-                Text(
-                    text = monument.kind.replace('_', ' '),
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.weight(1f)
-                )
-                monument.inception?.let {
+                monument.description?.let { desc ->
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        text = if (monument.artist != null) "📅 $it" else "Construit en $it",
-                        style = MaterialTheme.typography.labelSmall
+                        text = desc,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-            }
-            monument.artist?.let { artist ->
-                Text(
-                    text = "🎨 $artist",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-            monument.description?.let { desc ->
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = desc,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row {
-                OutlinedButton(onClick = onListen) { Text("🔊 Écouter") }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = onNavigate) { Text("Itinéraire") }
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    OutlinedButton(
+                        onClick = onListen,
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("🔊 Écouter") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = onNavigate,
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Itinéraire") }
+                }
             }
         }
     }
