@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,13 +15,30 @@ android {
         applicationId = "com.fabrice.monumentsnearby"
         minSdk = 29
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.7.1"
+        versionCode = 11
+        versionName = "0.7.2"
+    }
+
+    signingConfigs {
+        create("release") {
+            val b64 = System.getenv("MONUMENTS_KEYSTORE_B64")
+            if (!b64.isNullOrBlank()) {
+                val tmp = System.getenv("RUNNER_TEMP") ?: System.getProperty("java.io.tmpdir") ?: "/tmp"
+                val ks = File(tmp, "monuments-nearby-release.keystore")
+                ks.writeBytes(Base64.getDecoder().decode(b64))
+                storeFile = ks
+                storePassword = System.getenv("MONUMENTS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MONUMENTS_KEY_ALIAS")
+                keyPassword = System.getenv("MONUMENTS_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (System.getenv("MONUMENTS_KEYSTORE_B64").isNullOrBlank()) null
+                else signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false
@@ -67,4 +87,6 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
     // Scanner QR (ML Kit)
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

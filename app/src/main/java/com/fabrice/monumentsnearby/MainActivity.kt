@@ -1,4 +1,5 @@
 package com.fabrice.monumentsnearby
+import com.fabrice.monumentsnearby.update.UpdateManager
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -38,6 +39,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        UpdateManager.start(this)
         locationHelper = LocationHelper(this)
 
         // Android 13+ : demander la permission de notifications pour le géofencing
