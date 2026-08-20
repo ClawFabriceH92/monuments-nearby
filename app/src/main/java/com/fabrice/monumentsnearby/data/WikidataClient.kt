@@ -139,11 +139,16 @@ object WikidataClient {
         val label = labels?.optJSONObject("fr")?.optString("value")
         val desc = descriptions?.optJSONObject("fr")?.optString("value")
 
-        // Fallback : titre Wikipédia depuis le sitelink frwiki de Wikidata
+        // Fallback : titre Wikipédia depuis les sitelinks Wikidata (FR puis EN —
+        // hors de France beaucoup de monuments n'ont qu'un article anglais)
         var wikiTitle = m.wikipediaTitle
         if (wikiTitle.isNullOrBlank()) {
-            entity.optJSONObject("sitelinks")?.optJSONObject("frwiki")?.optString("title")
-                ?.takeIf { it.isNotBlank() }?.let { wikiTitle = it }
+            val sitelinks = entity.optJSONObject("sitelinks")
+            (sitelinks?.optJSONObject("frwiki")?.optString("title")
+                ?.takeIf { it.isNotBlank() }
+                ?: sitelinks?.optJSONObject("enwiki")?.optString("title")
+                    ?.takeIf { it.isNotBlank() })
+                ?.let { wikiTitle = it }
         }
 
         // Type ontologique : premier P31 résolu en label FR

@@ -22,6 +22,17 @@ import com.google.android.gms.location.LocationServices
 import org.json.JSONObject
 
 /**
+ * Visite guidée : quand l'app est ouverte et que l'option est activée,
+ * l'entrée dans une geofence déclenche la lecture audio de la fiche.
+ * L'UI (MonumentsScreen) enregistre le listener ; le receiver l'invoque.
+ */
+object GuidedVisitBus {
+    /** (nom, description) — invoqué sur le thread principal. */
+    @Volatile
+    var listener: ((String, String?) -> Unit)? = null
+}
+
+/**
  * Géofencing des monuments majeurs : alerte par notification quand on entre
  * dans un rayon de 200 m autour d'un monument. Max 20 geofences (limite Play).
  */
@@ -69,10 +80,17 @@ class GeofenceHelper(private val context: Context) {
                 .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
                 .build()
         }
-        // Mapper requestId → nom du monument (lu par le receiver)
+        // Mapper requestId → {nom, description} (lu par le receiver pour la
+        // notification et la lecture audio de la visite guidée)
         val names = JSONObject()
         geofences.forEachIndexed { index, g ->
-            names.put(g.requestId, monuments[index].name)
+            val m = monuments[index]
+            names.put(
+                g.requestId,
+                JSONObject()
+                    .put("n", m.name)
+                    .put("d", m.description?.take(1200) ?: "")
+            )
         }
         prefs.edit().putString("names", names.toString()).apply()
 
@@ -107,16 +125,34 @@ class GeofenceReceiver : BroadcastReceiver() {
         if (event.hasError()) return
         if (event.triggeringGeofences.isNullOrEmpty()) return
 
-        // Récupérer le nom depuis la map sauvegardée
+        // Récupérer nom + description depuis la map sauvegardée.
+        // Compat : les anciennes entrées étaient de simples chaînes (nom seul).
         val prefs = context.getSharedPreferences("geofence", Context.MODE_PRIVATE)
         val names = try {
             JSONObject(prefs.getString("names", "{}"))
         } catch (e: Exception) {
             JSONObject()
         }
+        var description: String? = null
         val name = event.triggeringGeofences
-            ?.firstNotNullOfOrNull { names.optString(it.requestId).takeIf { s -> s.isNotBlank() } }
+            ?.firstNotNullOfOrNull { geofence ->
+                when (val entry = names.opt(geofence.requestId)) {
+                    is JSONObject -> entry.optString("n").takeIf { it.isNotBlank() }?.also {
+                        description = entry.optString("d").takeIf { d -> d.isNotBlank() }
+                    }
+                    is String -> entry.takeIf { it.isNotBlank() }
+                    else -> null
+                }
+            }
             ?: "Monument à proximité"
+
+        // Visite guidée : lecture audio automatique si l'option est activée
+        // et que l'app est ouverte (listener enregistré par l'UI).
+        if (context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getBoolean("guidedVisit", false)
+        ) {
+            GuidedVisitBus.listener?.invoke(name, description)
+        }
 
         val channelId = "geofence"
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(

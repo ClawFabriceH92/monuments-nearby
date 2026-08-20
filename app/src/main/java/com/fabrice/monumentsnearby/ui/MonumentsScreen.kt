@@ -2,7 +2,9 @@ package com.fabrice.monumentsnearby.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -52,12 +54,14 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -65,15 +69,27 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.fabrice.monumentsnearby.BuildConfig
+import com.fabrice.monumentsnearby.data.FavoriteEntry
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WikidataClient
+import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.data.category
+import com.fabrice.monumentsnearby.location.GuidedVisitBus
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import com.fabrice.monumentsnearby.ui.theme.CategoryColors
 import com.fabrice.monumentsnearby.update.UpdateManager
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
@@ -112,7 +128,24 @@ fun MonumentsScreen(
             paused.value = false
             speakerActive.value = false
         }
-        onDispose { speaker.shutdown() }
+        // Visite guidée : le receiver de geofence invoque ce listener quand on
+        // entre dans le rayon d'un monument (si l'option est activée).
+        GuidedVisitBus.listener = { name, description ->
+            speakerActive.value = true
+            speaker.speak(
+                "Tu approches de $name. " + (description ?: "Regarde autour de toi !")
+            )
+        }
+        onDispose {
+            GuidedVisitBus.listener = null
+            speaker.shutdown()
+        }
+    }
+
+    // Lecture d'un texte arbitraire (article complet, visite guidée…)
+    val listenText: (String) -> Unit = { text ->
+        speakerActive.value = true
+        speaker.speak(text)
     }
 
     if (selectedMonument != null) {
@@ -127,6 +160,7 @@ fun MonumentsScreen(
                 speakerActive.value = true
                 speaker.speak(guideText(selectedMonument!!))
             },
+            onListenText = listenText,
             onViewWorks = {
                 val qid = selectedMonument!!.wikidataId ?: return@MonumentDetailScreen
                 val museum = WikidataClient.Museum(
@@ -423,6 +457,7 @@ private fun AroundContent(
         else -> null
     }
     var filter by remember { mutableStateOf<String?>(null) }
+    var sortByYear by remember { mutableStateOf(false) }
     var showWalk by remember { mutableStateOf(false) }
     // Balade affichée sur la carte (null = pas de tracé)
     var walkStops by remember { mutableStateOf<List<MonumentsViewModel.WalkStop>?>(null) }
@@ -458,8 +493,14 @@ private fun AroundContent(
             } else {
                 val visible = if (filter == null) effective.monuments
                 else effective.monuments.filter { it.category() == filter }
-                val majors = visible.filter { it.important }
-                val others = visible.filter { !it.important }
+                // Tri : distance (ordre d'origine) ou année de construction
+                val sorted = if (sortByYear) {
+                    visible.sortedBy { it.inception?.toIntOrNull() ?: Int.MAX_VALUE }
+                } else {
+                    visible
+                }
+                val majors = sorted.filter { it.important }
+                val others = sorted.filter { !it.important }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(12.dp),
@@ -479,6 +520,16 @@ private fun AroundContent(
                                 style = MaterialTheme.typography.labelMedium
                             )
                             Row {
+                                TextButton(
+                                    onClick = { sortByYear = !sortByYear },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = if (sortByYear) {
+                                            "Trier par distance"
+                                        } else {
+                                            "Trier par année de construction"
+                                        }
+                                    }
+                                ) { Text(if (sortByYear) "📅" else "📍") }
                                 TextButton(
                                     onClick = { onOpenCamera() },
                                     modifier = Modifier.semantics {
@@ -563,6 +614,7 @@ private fun WalkDialog(
     onNavigate: (Monument) -> Unit,
     onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("🥾 Balade à pied") },
@@ -595,6 +647,12 @@ private fun WalkDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+                }
+                if (stops.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = { exportWalkGpx(context, stops) }) {
+                        Text("💾 Exporter la balade (GPX)")
                     }
                 }
             }
@@ -893,6 +951,7 @@ private fun BookContent(
 ) {
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val visited by viewModel.visited.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -906,6 +965,21 @@ private fun BookContent(
                 ) {}
             }
             return@LazyColumn
+        }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${visited.size} visités · ${favorites.size} favoris",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { shareBook(context, favorites, visited) }) {
+                    Text("📤 Partager")
+                }
+            }
         }
         if (favorites.isNotEmpty()) {
             item { SectionHeader("⭐ Favoris (${favorites.size})") }
@@ -931,18 +1005,70 @@ private fun BookContent(
         }
         if (visited.isNotEmpty()) {
             item { SectionHeader("✓ Visités (${visited.size})") }
-            visited.entries.sortedBy { it.value }.forEach { (id, name) ->
-                item(key = "vis_$id") {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "✓ $name",
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(14.dp)
-                        )
+            // Les plus récents en premier (anciennes entrées sans date à la fin)
+            visited.entries
+                .sortedWith(
+                    compareByDescending<Map.Entry<String, VisitRepository.VisitedEntry>> {
+                        it.value.visitedAt ?: 0L
+                    }.thenBy { it.value.name }
+                )
+                .forEach { (id, entry) ->
+                    item(key = "vis_$id") {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "✓ ${entry.name}",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                entry.visitedAt?.let { millis ->
+                                    Text(
+                                        text = "Visité le ${formatDate(millis)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+        }
+    }
+}
+
+private fun formatDate(millis: Long): String =
+    SimpleDateFormat("d MMMM yyyy", Locale.FRANCE).format(Date(millis))
+
+/** Partage le carnet (favoris + visités) en texte. */
+private fun shareBook(
+    context: Context,
+    favorites: List<FavoriteEntry>,
+    visited: Map<String, VisitRepository.VisitedEntry>
+) {
+    val text = buildString {
+        append("Mon carnet de monuments 🏛\n")
+        if (visited.isNotEmpty()) {
+            append("\n✓ Visités (${visited.size}) :\n")
+            visited.values.sortedBy { it.name }.forEach { entry ->
+                append("• ${entry.name}")
+                entry.visitedAt?.let { append(" — ${formatDate(it)}") }
+                append("\n")
             }
         }
+        if (favorites.isNotEmpty()) {
+            append("\n⭐ À voir (${favorites.size}) :\n")
+            favorites.forEach { append("• ${it.name}\n") }
+        }
+        append("\nPartagé depuis Monuments Nearby")
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Mon carnet de monuments")
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    try {
+        context.startActivity(Intent.createChooser(send, "Partager le carnet"))
+    } catch (e: Exception) {
+        // aucune app de partage → silencieux
     }
 }
 
@@ -953,6 +1079,7 @@ private fun MonumentDetailScreen(
     viewModel: MonumentsViewModel,
     onClose: () -> Unit,
     onListen: () -> Unit,
+    onListenText: (String) -> Unit,
     onViewWorks: () -> Unit,
     lectureBar: @Composable () -> Unit
 ) {
@@ -960,13 +1087,19 @@ private fun MonumentDetailScreen(
     val loadingImages by viewModel.loadingImages.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val visited by viewModel.visited.collectAsStateWithLifecycle()
+    val notes by viewModel.notes.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
 
     val isMuseum = monument.kind.lowercase().contains("musée") ||
             monument.kind.lowercase().contains("museum")
     val isFav = favorites.any { it.id == monument.id }
     val isVis = visited.containsKey(monument.id)
+    val note = notes[monument.id]
+    var showNoteDialog by remember { mutableStateOf(false) }
+    var showQrDialog by remember { mutableStateOf(false) }
+    var loadingArticle by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -1120,6 +1253,22 @@ private fun MonumentDetailScreen(
                 style = MaterialTheme.typography.bodyMedium
             )
 
+            // Note personnelle du carnet
+            note?.let {
+                Spacer(Modifier.height(10.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "📝 Ta note",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
             if (loadingImages && images.isEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 SearchRow()
@@ -1151,6 +1300,43 @@ private fun MonumentDetailScreen(
                 Button(onClick = { openMaps(context, monument) }) { Text("Itinéraire") }
             }
 
+            // Audioguide long format : article Wikipédia complet
+            if (!monument.wikipediaTitle.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        val title = monument.wikipediaTitle
+                        if (title != null) {
+                            loadingArticle = true
+                            scope.launch {
+                                val text = WikipediaClient.fetchFullText(title)
+                                loadingArticle = false
+                                onListenText(
+                                    text ?: "L'article complet n'est pas disponible pour le moment."
+                                )
+                            }
+                        }
+                    },
+                    enabled = !loadingArticle,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (loadingArticle) "Chargement de l'article…"
+                        else "📖 Écouter l'article complet"
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showNoteDialog = true }) {
+                    Text(if (note == null) "📝 Ajouter une note" else "📝 Modifier la note")
+                }
+                if (!monument.wikidataId.isNullOrBlank()) {
+                    OutlinedButton(onClick = { showQrDialog = true }) { Text("🔳 QR") }
+                }
+            }
+
             if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
@@ -1161,6 +1347,112 @@ private fun MonumentDetailScreen(
         }
         }
     }
+
+    if (showNoteDialog) {
+        NoteDialog(
+            monumentName = monument.name,
+            initial = note ?: "",
+            onSave = { text ->
+                viewModel.setNote(monument.id, text)
+                showNoteDialog = false
+            },
+            onDismiss = { showNoteDialog = false }
+        )
+    }
+
+    if (showQrDialog && !monument.wikidataId.isNullOrBlank()) {
+        QrDialog(
+            monumentName = monument.name,
+            qid = monument.wikidataId,
+            onDismiss = { showQrDialog = false }
+        )
+    }
+}
+
+/** Dialog d'édition de la note personnelle d'un monument. */
+@Composable
+private fun NoteDialog(
+    monumentName: String,
+    initial: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("📝 Note — $monumentName") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text("Ton souvenir, une anecdote, à revoir…") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text) }) { Text("Enregistrer") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
+}
+
+/**
+ * QR code de la fiche (URL Wikidata) : un ami le scanne avec le mode QR de
+ * l'app (ou n'importe quel lecteur) pour ouvrir la même fiche.
+ */
+@Composable
+private fun QrDialog(
+    monumentName: String,
+    qid: String,
+    onDismiss: () -> Unit
+) {
+    val qrBitmap = remember(qid) { generateQr("https://www.wikidata.org/wiki/$qid") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("🔳 $monumentName") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (qrBitmap != null) {
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = "QR code de $monumentName",
+                        modifier = Modifier.size(240.dp)
+                    )
+                } else {
+                    Text("Impossible de générer le QR code.")
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Scanne ce code avec le mode QR de Monuments Nearby pour ouvrir la fiche.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
+        }
+    )
+}
+
+/** Génère un QR code (noir sur blanc) pour [content]. */
+private fun generateQr(content: String, size: Int = 512): Bitmap? = try {
+    val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            pixels[y * size + x] =
+                if (matrix.get(x, y)) android.graphics.Color.BLACK
+                else android.graphics.Color.WHITE
+        }
+    }
+    Bitmap.createBitmap(pixels, size, size, Bitmap.Config.RGB_565)
+} catch (e: Exception) {
+    null
 }
 
 @Composable
@@ -1206,6 +1498,8 @@ private fun SettingsDialog(
     val context = LocalContext.current
     val voices = speaker.voices
     val radius by viewModel.searchRadiusM.collectAsStateWithLifecycle()
+    val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
+    val dailyDiscovery by viewModel.dailyDiscovery.collectAsStateWithLifecycle()
     var autoUpdate by remember { mutableStateOf(UpdateManager.autoUpdateEnabled(context)) }
     var checkLaunched by remember { mutableStateOf(false) }
     var selectedSpeed by remember { mutableStateOf(speaker.currentSpeed) }
@@ -1240,6 +1534,42 @@ private fun SettingsDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(14.dp))
+
+                // --- Découverte ---
+                Text(
+                    "Découverte",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Visite guidée", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Lecture audio automatique à l'approche d'un monument (alerte 🔔 activée, app ouverte).",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = guidedVisit,
+                        onCheckedChange = { viewModel.setGuidedVisit(it) }
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Monument du jour", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Notification quotidienne : un monument majeur non visité près de ta dernière recherche.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = dailyDiscovery,
+                        onCheckedChange = { viewModel.setDailyDiscovery(it) }
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
 
                 // --- Mises à jour ---
@@ -1555,6 +1885,54 @@ private fun openWebsite(context: Context, url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(safe)))
     } catch (e: Exception) {
         // pas de navigateur → silencieux
+    }
+}
+
+/**
+ * Exporte la balade en fichier GPX (waypoints + route) et ouvre le partage —
+ * importable dans Osmand, Organic Maps, Komoot, Garmin…
+ */
+private fun exportWalkGpx(context: Context, stops: List<MonumentsViewModel.WalkStop>) {
+    if (stops.isEmpty()) return
+    try {
+        fun esc(s: String) = s
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val gpx = buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+            append(
+                "<gpx version=\"1.1\" creator=\"Monuments Nearby\" " +
+                    "xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
+            )
+            stops.forEach { stop ->
+                append(
+                    "  <wpt lat=\"${stop.monument.lat}\" lon=\"${stop.monument.lon}\">" +
+                        "<name>${esc(stop.monument.name)}</name></wpt>\n"
+                )
+            }
+            append("  <rte><name>Balade Monuments Nearby</name>\n")
+            stops.forEach { stop ->
+                append(
+                    "    <rtept lat=\"${stop.monument.lat}\" lon=\"${stop.monument.lon}\">" +
+                        "<name>${esc(stop.monument.name)}</name></rtept>\n"
+                )
+            }
+            append("  </rte>\n")
+            append("</gpx>\n")
+        }
+        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+        val file = File(dir, "balade-monuments.gpx")
+        file.writeText(gpx)
+        val uri = FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider", file
+        )
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/gpx+xml"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(send, "Exporter la balade"))
+    } catch (e: Exception) {
+        // partage impossible → silencieux
     }
 }
 

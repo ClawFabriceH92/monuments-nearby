@@ -24,11 +24,11 @@ object GeocoderClient {
         val lon: Double
     )
 
-    /** Géocode un nom de ville (France prioritaire). Retourne null si introuvable. */
+    /** Géocode un nom de ville — monde entier, libellés en français. */
     suspend fun geocodeCity(query: String): City? =
         withContext(Dispatchers.IO) {
             val url = "$BASE?q=${URLEncoder.encode(query, "UTF-8")}" +
-                    "&format=json&limit=1&countrycodes=fr&accept-language=fr"
+                    "&format=json&limit=1&accept-language=fr"
             // Referer demandé par la politique d'usage de Nominatim
             val request = Request.Builder().url(url)
                 .header("Referer", "https://github.com/ClawFabriceH92/monuments-nearby")

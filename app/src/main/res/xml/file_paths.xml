@@ -3,4 +3,8 @@
     <external-files-path
         name="downloads"
         path="Download/" />
+    <!-- Fichiers partagés temporairement (export GPX de la balade) -->
+    <cache-path
+        name="shared"
+        path="shared/" />
 </paths>

@@ -74,21 +74,74 @@ class VisitRepository(context: Context) {
         return list
     }
 
-    /** Monuments visités : id → nom. */
-    fun visited(): Map<String, String> {
+    /** Un monument visité : nom + date de visite (null pour les anciennes entrées). */
+    data class VisitedEntry(val name: String, val visitedAt: Long?)
+
+    /**
+     * Monuments visités : id → (nom, date).
+     * Format stocké : "id::nom" (historique) ou "id::nom::epochMillis".
+     */
+    fun visited(): Map<String, VisitedEntry> {
         val set = prefs.getStringSet("visited", emptySet()) ?: emptySet()
         return set.mapNotNull { line ->
             val idx = line.indexOf("::")
-            if (idx > 0) line.substring(0, idx) to line.substring(idx + 2) else null
+            if (idx <= 0) return@mapNotNull null
+            val id = line.substring(0, idx)
+            val rest = line.substring(idx + 2)
+            val lastIdx = rest.lastIndexOf("::")
+            val millis = if (lastIdx > 0) {
+                rest.substring(lastIdx + 2).toLongOrNull()
+            } else {
+                null
+            }
+            val name = if (millis != null) rest.substring(0, lastIdx) else rest
+            id to VisitedEntry(name, millis)
         }.toMap()
     }
 
     fun isVisited(id: String): Boolean = visited().containsKey(id)
 
-    fun toggleVisited(id: String, name: String): Map<String, String> {
+    fun toggleVisited(id: String, name: String): Map<String, VisitedEntry> {
         val map = visited().toMutableMap()
-        if (map.remove(id) == null) map[id] = name
-        prefs.edit().putStringSet("visited", map.map { "${it.key}::${it.value}" }.toSet()).apply()
+        if (map.remove(id) == null) map[id] = VisitedEntry(name, System.currentTimeMillis())
+        prefs.edit().putStringSet(
+            "visited",
+            map.map { (key, entry) ->
+                if (entry.visitedAt != null) {
+                    "$key::${entry.name}::${entry.visitedAt}"
+                } else {
+                    "$key::${entry.name}"
+                }
+            }.toSet()
+        ).apply()
+        return map
+    }
+
+    /** Notes personnelles : id → note. */
+    fun notes(): Map<String, String> {
+        val raw = prefs.getString("notes", null) ?: return emptyMap()
+        return try {
+            val o = JSONObject(raw)
+            val result = mutableMapOf<String, String>()
+            val keys = o.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val note = o.optString(key)
+                if (note.isNotBlank()) result[key] = note
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /** Enregistre (ou efface si vide) la note d'un monument. Retourne la map à jour. */
+    fun setNote(id: String, note: String?): Map<String, String> {
+        val map = notes().toMutableMap()
+        if (note.isNullOrBlank()) map.remove(id) else map[id] = note.trim()
+        val o = JSONObject()
+        map.forEach { (key, value) -> o.put(key, value) }
+        prefs.edit().putString("notes", o.toString()).apply()
         return map
     }
 }

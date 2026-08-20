@@ -57,8 +57,12 @@ object WikipediaClient {
         }
     }
 
-    private suspend fun fetchSummary(title: String): String? {
-        val url = "https://fr.wikipedia.org/api/rest_v1/page/summary/" +
+    /** Résumé : Wikipédia FR d'abord, repli EN (voyages hors de France). */
+    private suspend fun fetchSummary(title: String): String? =
+        fetchSummary("fr", title) ?: fetchSummary("en", title)
+
+    private fun fetchSummary(lang: String, title: String): String? {
+        val url = "https://$lang.wikipedia.org/api/rest_v1/page/summary/" +
                 URLEncoder.encode(title.replace(' ', '_'), "UTF-8")
         val request = Request.Builder().url(url).build()
         client.newCall(request).execute().use { resp ->
@@ -74,24 +78,67 @@ object WikipediaClient {
         }
     }
 
+    /** Longueur maximale de l'article complet lu par l'audioguide (~12 min). */
+    private const val MAX_ARTICLE_CHARS = 12000
+
+    /**
+     * Texte intégral (brut) de l'article Wikipédia — pour « écouter l'article
+     * complet ». FR d'abord, repli EN. Null si introuvable ou réseau KO.
+     */
+    suspend fun fetchFullText(title: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                fetchFullText("fr", title) ?: fetchFullText("en", title)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+    private fun fetchFullText(lang: String, title: String): String? {
+        val url = "https://$lang.wikipedia.org/w/api.php?action=query&prop=extracts" +
+                "&explaintext=1&redirects=1&format=json" +
+                "&titles=${URLEncoder.encode(title, "UTF-8")}"
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            val pages = JSONObject(body).optJSONObject("query")?.optJSONObject("pages")
+                ?: return null
+            val keys = pages.keys()
+            while (keys.hasNext()) {
+                val page = pages.optJSONObject(keys.next()) ?: continue
+                val extract = page.optString("extract").takeIf { it.isNotBlank() } ?: continue
+                return if (extract.length > MAX_ARTICLE_CHARS) {
+                    extract.take(MAX_ARTICLE_CHARS).trimEnd() + "…"
+                } else {
+                    extract
+                }
+            }
+            return null
+        }
+    }
+
     /**
      * Résumé Wikivoyage d'une ville (guide touristique). Non bloquant.
      * Ex: https://fr.wikivoyage.org/api/rest_v1/page/summary/Asnières-sur-Seine
      */
-    suspend fun fetchWikivoyageSummary(city: String): String? {
-        val url = "https://fr.wikivoyage.org/api/rest_v1/page/summary/" +
-                URLEncoder.encode(city.replace(' ', '_'), "UTF-8")
-        val request = Request.Builder().url(url).build()
-        return try {
-            client.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                val body = resp.body?.string() ?: return null
-                val extract = JSONObject(body).optString("extract").takeIf { it.isNotBlank() }
-                    ?: return null
-                if (extract.length > 600) extract.take(600).trimEnd() + "…" else extract
+    suspend fun fetchWikivoyageSummary(city: String): String? =
+        // withContext(IO) indispensable : appelé depuis le thread principal,
+        // l'appel réseau levait NetworkOnMainThreadException (guide jamais affiché)
+        withContext(Dispatchers.IO) {
+            val url = "https://fr.wikivoyage.org/api/rest_v1/page/summary/" +
+                    URLEncoder.encode(city.replace(' ', '_'), "UTF-8")
+            val request = Request.Builder().url(url).build()
+            try {
+                client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) return@withContext null
+                    val body = resp.body?.string() ?: return@withContext null
+                    val extract = JSONObject(body).optString("extract")
+                        .takeIf { it.isNotBlank() } ?: return@withContext null
+                    if (extract.length > 600) extract.take(600).trimEnd() + "…" else extract
+                }
+            } catch (e: Exception) {
+                null
             }
-        } catch (e: Exception) {
-            null
         }
-    }
 }

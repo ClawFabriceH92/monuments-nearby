@@ -89,6 +89,8 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
     // Scanner QR (ML Kit)
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    // Génération de QR codes (partage de fiche)
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

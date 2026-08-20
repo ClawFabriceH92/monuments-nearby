@@ -4,8 +4,13 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.fabrice.monumentsnearby.DailyDiscoveryWorker
 import com.fabrice.monumentsnearby.data.GeocoderClient
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.MonumentCache
 import com.fabrice.monumentsnearby.data.OverpassClient
 import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WikidataClient
@@ -17,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 /** Mode d'affichage principal de l'application. */
 enum class AppMode { MONUMENTS, MUSEUM, CITY }
@@ -57,6 +64,48 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         settingsPrefs.edit().putInt("searchRadiusM", radiusM).apply()
     }
 
+    /** Visite guidée : lecture audio automatique à l'approche d'un monument. */
+    private val _guidedVisit = MutableStateFlow(settingsPrefs.getBoolean("guidedVisit", false))
+    val guidedVisit: StateFlow<Boolean> = _guidedVisit
+
+    fun setGuidedVisit(enabled: Boolean) {
+        _guidedVisit.value = enabled
+        settingsPrefs.edit().putBoolean("guidedVisit", enabled).apply()
+    }
+
+    /** Monument du jour : notification quotidienne (10h) depuis le cache. */
+    private val _dailyDiscovery = MutableStateFlow(settingsPrefs.getBoolean("dailyDiscovery", false))
+    val dailyDiscovery: StateFlow<Boolean> = _dailyDiscovery
+
+    fun setDailyDiscovery(enabled: Boolean) {
+        _dailyDiscovery.value = enabled
+        settingsPrefs.edit().putBoolean("dailyDiscovery", enabled).apply()
+        val workManager = WorkManager.getInstance(getApplication<Application>())
+        if (enabled) {
+            val request = PeriodicWorkRequestBuilder<DailyDiscoveryWorker>(24, TimeUnit.HOURS)
+                .setInitialDelay(millisUntilHour(10), TimeUnit.MILLISECONDS)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                "daily-monument", ExistingPeriodicWorkPolicy.UPDATE, request
+            )
+        } else {
+            workManager.cancelUniqueWork("daily-monument")
+        }
+    }
+
+    /** Millisecondes jusqu'à la prochaine occurrence de [hour]:00. */
+    private fun millisUntilHour(hour: Int): Long {
+        val now = Calendar.getInstance()
+        val next = (now.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (timeInMillis <= now.timeInMillis) add(Calendar.DAY_OF_YEAR, 1)
+        }
+        return next.timeInMillis - now.timeInMillis
+    }
+
     /** Alerte géofencing active ? */
     private val _geofencesActive = MutableStateFlow(false)
     val geofencesActive: StateFlow<Boolean> = _geofencesActive
@@ -79,9 +128,17 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     private val _favorites = MutableStateFlow(repository.favorites())
     val favorites: StateFlow<List<com.fabrice.monumentsnearby.data.FavoriteEntry>> = _favorites
 
-    /** Monuments marqués visités : id → nom. */
+    /** Monuments marqués visités : id → (nom, date). */
     private val _visited = MutableStateFlow(repository.visited())
-    val visited: StateFlow<Map<String, String>> = _visited
+    val visited: StateFlow<Map<String, VisitRepository.VisitedEntry>> = _visited
+
+    /** Notes personnelles : id → note. */
+    private val _notes = MutableStateFlow(repository.notes())
+    val notes: StateFlow<Map<String, String>> = _notes
+
+    fun setNote(id: String, note: String?) {
+        _notes.value = repository.setNote(id, note)
+    }
 
     fun toggleFavorite(monument: Monument) {
         _favorites.value = repository.toggleFavorite(
@@ -141,14 +198,27 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 val raw = OverpassClient.fetchMonuments(lat, lon, radiusM = _searchRadiusM.value)
                 var enriched = WikidataClient.enrich(raw) // ontologie + types + photos
                 enriched = WikipediaClient.enrich(enriched) // résumés d'articles
+                MonumentCache.save(
+                    getApplication<Application>(), enriched, lat, lon, "Monuments à proximité"
+                )
                 UiState.Success(enriched, lat, lon, AppMode.MONUMENTS, "Monuments à proximité")
             } catch (e: Exception) {
-                UiState.Error(e.message ?: "Erreur inconnue")
+                // Réseau KO → derniers résultats en cache plutôt qu'une erreur sèche
+                cachedFallback() ?: UiState.Error(e.message ?: "Erreur inconnue")
             }
             if (result is UiState.Success) _lastMonuments.value = result
             _state.value = result
         }
     }
+
+    /** Derniers résultats en cache, présentés comme état hors-ligne. */
+    private fun cachedFallback(): UiState.Success? =
+        MonumentCache.load(getApplication<Application>())?.let {
+            UiState.Success(
+                it.monuments, it.lat, it.lon, AppMode.MONUMENTS,
+                "${it.title} (hors-ligne)"
+            )
+        }
 
     private var searchJob: Job? = null
 
@@ -251,6 +321,9 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 } catch (e: Exception) {
                     null
                 }
+                MonumentCache.save(
+                    getApplication<Application>(), enriched, city.lat, city.lon, "Ville : ${city.name}"
+                )
                 UiState.Success(enriched, city.lat, city.lon, AppMode.CITY, "Ville : ${city.name}")
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")
@@ -322,7 +395,16 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun onLocationUnavailable() {
-        _state.value = UiState.Error("Position introuvable. Vérifie que le GPS est activé et dehors/à la fenêtre.")
+        // Sans position, montrer au moins les derniers résultats en cache
+        val fallback = cachedFallback()
+        if (fallback != null) {
+            _lastMonuments.value = fallback
+            _state.value = fallback
+        } else {
+            _state.value = UiState.Error(
+                "Position introuvable. Vérifie que le GPS est activé et dehors/à la fenêtre."
+            )
+        }
     }
 
     // ---------------------------------------------------------------
