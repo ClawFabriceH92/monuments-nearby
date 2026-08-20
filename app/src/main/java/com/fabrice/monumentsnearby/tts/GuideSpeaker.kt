@@ -36,6 +36,9 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
 
     val currentSpeed: Float get() = speed
 
+    /** Nom de la voix sélectionnée (null = voix système par défaut). */
+    val currentVoice: String? get() = selectedVoiceName
+
     // Lecture par phrases (pour la pause/reprise)
     private val phrases = mutableListOf<String>()
     private var phraseIndex = 0

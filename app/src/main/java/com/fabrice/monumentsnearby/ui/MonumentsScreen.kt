@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -66,11 +67,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.fabrice.monumentsnearby.BuildConfig
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import com.fabrice.monumentsnearby.ui.theme.CategoryColors
+import com.fabrice.monumentsnearby.update.UpdateManager
 import kotlin.math.roundToInt
 
 enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
@@ -88,7 +91,7 @@ fun MonumentsScreen(
 
     var selectedTab by remember { mutableStateOf(AppTab.AROUND) }
     var showMap by remember { mutableStateOf(false) }
-    var showVoiceDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     var selectedMonument by remember { mutableStateOf<Monument?>(null) }
     val paused = remember { mutableStateOf(false) }
     val speakerActive = remember { mutableStateOf(false) }
@@ -197,11 +200,11 @@ fun MonumentsScreen(
                         ) {
                             Text(if (geofencesActive) "🔔" else "🔕")
                         }
-                        // Réglages de l'audioguide (voix + vitesse)
+                        // Réglages (recherche, mises à jour, audioguide)
                         TextButton(
-                            onClick = { showVoiceDialog = true },
+                            onClick = { showSettingsDialog = true },
                             modifier = Modifier.semantics {
-                                contentDescription = "Réglages de l'audioguide"
+                                contentDescription = "Réglages"
                             }
                         ) {
                             Text("⚙️")
@@ -278,6 +281,7 @@ fun MonumentsScreen(
                         context = context,
                         showMap = showMap,
                         onToggleMap = { showMap = !showMap },
+                        onOpenMap = { showMap = true },
                         onSelectMonument = { selectedMonument = it },
                         onLocate = onLocate,
                         onOpenCamera = {
@@ -331,8 +335,12 @@ fun MonumentsScreen(
         }
     }
 
-    if (showVoiceDialog) {
-        VoiceDialog(speaker = speaker, onDismiss = { showVoiceDialog = false })
+    if (showSettingsDialog) {
+        SettingsDialog(
+            speaker = speaker,
+            viewModel = viewModel,
+            onDismiss = { showSettingsDialog = false }
+        )
     }
 }
 
@@ -402,6 +410,7 @@ private fun AroundContent(
     context: Context,
     showMap: Boolean,
     onToggleMap: () -> Unit,
+    onOpenMap: () -> Unit,
     onSelectMonument: (Monument) -> Unit,
     onLocate: () -> Unit,
     onOpenCamera: () -> Unit
@@ -415,6 +424,8 @@ private fun AroundContent(
     }
     var filter by remember { mutableStateOf<String?>(null) }
     var showWalk by remember { mutableStateOf(false) }
+    // Balade affichée sur la carte (null = pas de tracé)
+    var walkStops by remember { mutableStateOf<List<MonumentsViewModel.WalkStop>?>(null) }
 
     when {
         effective != null -> {
@@ -423,12 +434,27 @@ private fun AroundContent(
                     Button(onClick = onLocate) { Text("📍 Réessayer") }
                 }
             } else if (showMap) {
-                MonumentsMap(
-                    monuments = effective.monuments,
-                    centerLat = effective.lat,
-                    centerLon = effective.lon,
-                    onSelectMonument = onSelectMonument
-                )
+                Box(Modifier.fillMaxSize()) {
+                    MonumentsMap(
+                        monuments = effective.monuments,
+                        centerLat = effective.lat,
+                        centerLon = effective.lon,
+                        onSelectMonument = onSelectMonument,
+                        walkRoute = walkStops?.map { it.monument }
+                    )
+                    // La carte n'avait aucun bouton de retour vers la liste
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(onClick = onToggleMap) { Text("📋 Liste") }
+                        if (walkStops != null) {
+                            Button(onClick = { walkStops = null }) { Text("✕ Itinéraire") }
+                        }
+                    }
+                }
             } else {
                 val visible = if (filter == null) effective.monuments
                 else effective.monuments.filter { it.category() == filter }
@@ -517,7 +543,12 @@ private fun AroundContent(
         WalkDialog(
             stops = viewModel.buildWalk(effective.monuments, effective.lat, effective.lon),
             onDismiss = { showWalk = false },
-            onNavigate = { openMaps(context, it) }
+            onNavigate = { openMaps(context, it) },
+            onShowOnMap = { stops ->
+                walkStops = stops
+                showWalk = false
+                onOpenMap()
+            }
         )
     }
 }
@@ -529,7 +560,8 @@ private fun AroundContent(
 private fun WalkDialog(
     stops: List<MonumentsViewModel.WalkStop>,
     onDismiss: () -> Unit,
-    onNavigate: (Monument) -> Unit
+    onNavigate: (Monument) -> Unit,
+    onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -567,7 +599,12 @@ private fun WalkDialog(
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            TextButton(
+                onClick = { onShowOnMap(stops) },
+                enabled = stops.isNotEmpty()
+            ) { Text("🗺️ Sur la carte") }
+        },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Fermer") }
         }
@@ -1156,14 +1193,87 @@ private fun MuseumResultButton(
     }
 }
 
+/**
+ * Réglages de l'application : rayon de recherche, mises à jour automatiques,
+ * audioguide (vitesse + voix). Ouvert par le bouton ⚙️ de la barre du haut.
+ */
 @Composable
-private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
+private fun SettingsDialog(
+    speaker: GuideSpeaker,
+    viewModel: MonumentsViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
     val voices = speaker.voices
+    val radius by viewModel.searchRadiusM.collectAsStateWithLifecycle()
+    var autoUpdate by remember { mutableStateOf(UpdateManager.autoUpdateEnabled(context)) }
+    var checkLaunched by remember { mutableStateOf(false) }
+    var selectedSpeed by remember { mutableStateOf(speaker.currentSpeed) }
+    var selectedVoice by remember { mutableStateOf(speaker.currentVoice) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Audioguide") },
+        title = { Text("Réglages") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                // --- Rayon de recherche ---
+                Text(
+                    "Rayon de recherche",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(1000, 3000, 6000, 10000).forEach { r ->
+                        FilterChip(
+                            selected = radius == r,
+                            onClick = { viewModel.setSearchRadius(r) },
+                            label = { Text("${r / 1000} km") }
+                        )
+                    }
+                }
+                Text(
+                    "Appliqué à la prochaine recherche « Autour de moi ».",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(14.dp))
+
+                // --- Mises à jour ---
+                Text(
+                    "Mises à jour",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Mise à jour automatique",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = autoUpdate,
+                        onCheckedChange = {
+                            autoUpdate = it
+                            UpdateManager.setAutoUpdate(context, it)
+                        }
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        UpdateManager.checkNow(context)
+                        checkLaunched = true
+                    },
+                    enabled = !checkLaunched
+                ) {
+                    Text(if (checkLaunched) "✓ Vérification lancée" else "Vérifier maintenant")
+                }
+                Spacer(Modifier.height(14.dp))
+
+                // --- Audioguide ---
                 Text(
                     "Vitesse de lecture",
                     style = MaterialTheme.typography.titleSmall,
@@ -1172,16 +1282,16 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f).forEach { rate ->
-                        val selected = speaker.currentSpeed == rate
                         TextButton(
                             onClick = {
                                 speaker.setSpeed(rate)
+                                selectedSpeed = rate
                                 speaker.speak("Vitesse réglée sur ${formatRate(rate)}.")
                             }
                         ) {
                             Text(
                                 text = formatRate(rate),
-                                color = if (selected) {
+                                color = if (selectedSpeed == rate) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -1190,11 +1300,6 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
                         }
                     }
                 }
-                Text(
-                    "Vitesse actuelle : ${formatRate(speaker.currentSpeed)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 Spacer(Modifier.height(12.dp))
 
                 Text(
@@ -1207,16 +1312,39 @@ private fun VoiceDialog(speaker: GuideSpeaker, onDismiss: () -> Unit) {
                     Text("Aucune voix disponible sur cet appareil.")
                 } else {
                     voices.forEach { voice ->
+                        val isSelected = voice.name == selectedVoice
                         TextButton(
                             onClick = {
                                 speaker.setVoice(voice.name)
-                                onDismiss()
+                                selectedVoice = voice.name
                             }
                         ) {
-                            Text(voice.name)
+                            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+                                Text(
+                                    text = if (isSelected) "✓ ${voice.name}" else voice.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                                Text(
+                                    voice.locale,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Monuments Nearby v${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         },
         confirmButton = {},
@@ -1325,16 +1453,28 @@ private fun MonumentCard(
             }
             Column(Modifier.padding(14.dp)) {
                 if (monument.imageUrl == null) {
-                    Surface(
-                        color = CategoryColors.forCategory(category).copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(50)
-                    ) {
-                        Text(
-                            text = category.replaceFirstChar { it.uppercase() },
-                            color = CategoryColors.forCategory(category),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                        )
+                    // Sans photo, le badge distance de l'image n'existe pas :
+                    // on l'affiche à côté du badge de catégorie.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = CategoryColors.forCategory(category).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                text = category.replaceFirstChar { it.uppercase() },
+                                color = CategoryColors.forCategory(category),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        if (monument.distanceM > 0) {
+                            Text(
+                                text = formatDistance(monument.distanceM),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
                 }

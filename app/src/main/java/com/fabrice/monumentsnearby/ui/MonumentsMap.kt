@@ -22,6 +22,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
+import org.osmdroid.views.overlay.Polyline
 
 /**
  * Carte OpenStreetMap (osmdroid — gratuit, sans clé API).
@@ -29,6 +30,7 @@ import org.osmdroid.views.overlay.Polygon
  * - Cercles rouges en pointillés : temps de marche 5 min (400 m) et 15 min (1 200 m)
  *   (vitesse de marche 4,8 km/h)
  * - Un marqueur par monument — un tap ouvre la fiche détail
+ * - [walkRoute] : trace l'itinéraire de balade (ligne or) depuis la position
  */
 @Composable
 fun MonumentsMap(
@@ -36,6 +38,7 @@ fun MonumentsMap(
     centerLat: Double,
     centerLon: Double,
     onSelectMonument: (Monument) -> Unit = {},
+    walkRoute: List<Monument>? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -80,6 +83,32 @@ fun MonumentsMap(
                         }
                     }
                 )
+            }
+        }
+    }
+
+    // Itinéraire de balade : ligne or position → étapes, ajoutée/retirée
+    // dynamiquement (la MapView est mémorisée, pas recréée).
+    DisposableEffect(walkRoute) {
+        val polyline = walkRoute?.takeIf { it.isNotEmpty() }?.let { stops ->
+            Polyline(mapView).apply {
+                setPoints(
+                    listOf(GeoPoint(centerLat, centerLon)) +
+                        stops.map { GeoPoint(it.lat, it.lon) }
+                )
+                outlinePaint.color = Color.rgb(201, 151, 43) // or du thème
+                outlinePaint.strokeWidth = 9f
+            }
+        }
+        if (polyline != null) {
+            // Après les cercles de marche (index 0-1), sous les marqueurs
+            mapView.overlays.add(2, polyline)
+            mapView.invalidate()
+        }
+        onDispose {
+            if (polyline != null) {
+                mapView.overlays.remove(polyline)
+                mapView.invalidate()
             }
         }
     }

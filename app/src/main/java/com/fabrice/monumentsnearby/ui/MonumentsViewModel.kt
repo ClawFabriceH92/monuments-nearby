@@ -1,6 +1,7 @@
 package com.fabrice.monumentsnearby.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fabrice.monumentsnearby.data.GeocoderClient
@@ -45,6 +46,16 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val repository = VisitRepository(application)
     private val geofenceHelper = GeofenceHelper(application)
+    private val settingsPrefs = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    /** Rayon de recherche « Autour de moi » en mètres (réglable, persisté). */
+    private val _searchRadiusM = MutableStateFlow(settingsPrefs.getInt("searchRadiusM", 3000))
+    val searchRadiusM: StateFlow<Int> = _searchRadiusM
+
+    fun setSearchRadius(radiusM: Int) {
+        _searchRadiusM.value = radiusM
+        settingsPrefs.edit().putInt("searchRadiusM", radiusM).apply()
+    }
 
     /** Alerte géofencing active ? */
     private val _geofencesActive = MutableStateFlow(false)
@@ -127,7 +138,7 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         _state.value = UiState.Loading
         viewModelScope.launch {
             val result = try {
-                val raw = OverpassClient.fetchMonuments(lat, lon)
+                val raw = OverpassClient.fetchMonuments(lat, lon, radiusM = _searchRadiusM.value)
                 var enriched = WikidataClient.enrich(raw) // ontologie + types + photos
                 enriched = WikipediaClient.enrich(enriched) // résumés d'articles
                 UiState.Success(enriched, lat, lon, AppMode.MONUMENTS, "Monuments à proximité")
