@@ -3,7 +3,7 @@ package com.fabrice.monumentsnearby
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
-import okhttp3.OkHttpClient
+import com.fabrice.monumentsnearby.data.Http
 import java.util.concurrent.TimeUnit
 
 /**
@@ -14,16 +14,11 @@ import java.util.concurrent.TimeUnit
 class MonumentsApp : Application(), ImageLoaderFactory {
 
     override fun newImageLoader(): ImageLoader {
-        val client = OkHttpClient.Builder()
+        // Client partagé (User-Agent + pool de connexions communs),
+        // timeout de lecture élargi pour les grandes images.
+        val client = Http.client.newBuilder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor { chain ->
-                chain.proceed(
-                    chain.request().newBuilder()
-                        .header("User-Agent", "MonumentsNearby/0.5 (Android)")
-                        .build()
-                )
-            }
             .build()
 
         return ImageLoader.Builder(this)

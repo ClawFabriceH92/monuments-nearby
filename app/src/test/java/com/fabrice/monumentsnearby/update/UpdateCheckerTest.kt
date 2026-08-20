@@ -63,4 +63,40 @@ class UpdateCheckerTest {
         assertNull(UpdateChecker.parseReleases("[]"))
         assertNull(UpdateChecker.parseReleases("pas du json"))
     }
+
+    @Test
+    fun `parseReleases - release roulante "latest" via le nom de l'APK`() {
+        // La release "latest" (push sur main) n'a pas de tag versionné :
+        // la version doit être extraite du nom de l'APK.
+        val json = """
+            [
+              {"tag_name": "latest", "draft": false,
+               "body": "build automatique", "published_at": "2026-08-17T10:00:00Z",
+               "assets": [{"name": "monuments-nearby-v0.7.3.apk", "browser_download_url": "https://x/latest.apk"}]},
+              {"tag_name": "v0.7.2", "draft": false,
+               "assets": [{"name": "monuments-nearby-v0.7.2.apk", "browser_download_url": "https://x/v0.7.2.apk"}]}
+            ]
+        """.trimIndent()
+        val info = UpdateChecker.parseReleases(json)
+        assertEquals("0.7.3", info?.versionName)
+        assertEquals("https://x/latest.apk", info?.downloadUrl)
+    }
+
+    @Test
+    fun `parseReleases - ignore une release sans version identifiable`() {
+        val json = """
+            [
+              {"tag_name": "latest", "draft": false,
+               "assets": [{"name": "app-release.apk", "browser_download_url": "https://x/app.apk"}]}
+            ]
+        """.trimIndent()
+        assertNull(UpdateChecker.parseReleases(json))
+    }
+
+    @Test
+    fun `versionFromAssetName - extraction`() {
+        assertEquals("0.7.2", UpdateChecker.versionFromAssetName("monuments-nearby-v0.7.2.apk"))
+        assertEquals("1.0", UpdateChecker.versionFromAssetName("app-1.0.apk"))
+        assertNull(UpdateChecker.versionFromAssetName("app-release.apk"))
+    }
 }

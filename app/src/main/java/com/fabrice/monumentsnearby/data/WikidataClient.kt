@@ -2,11 +2,9 @@ package com.fabrice.monumentsnearby.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 
 /**
  * Enrichissement sémantique via Wikidata (l'ontologie de Wikimedia) :
@@ -24,17 +22,7 @@ object WikidataClient {
     private const val BASE = "https://www.wikidata.org/w/api.php"
     private const val MAX_IDS = 50
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .addInterceptor { chain ->
-            chain.proceed(
-                chain.request().newBuilder()
-                    .header("User-Agent", "MonumentsNearby/0.1 (Android)")
-                    .build()
-            )
-        }
-        .build()
+    private val client = Http.client
 
     suspend fun enrich(monuments: List<Monument>): List<Monument> {
         val withIds = monuments.filter { !it.wikidataId.isNullOrBlank() }

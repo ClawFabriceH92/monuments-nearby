@@ -3,7 +3,6 @@ package com.fabrice.monumentsnearby.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -29,17 +28,11 @@ object OverpassClient {
         "https://overpass.kumi.systems/api/interpreter"
     )
 
-    private val client = OkHttpClient.Builder()
+    // Client partagé (User-Agent inclus), timeout de lecture élargi :
+    // les requêtes Overpass peuvent être longues.
+    private val client = Http.client.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
-        // Overpass exige un User-Agent identifiant l'application
-        .addInterceptor { chain ->
-            chain.proceed(
-                chain.request().newBuilder()
-                    .header("User-Agent", "MonumentsNearby/0.1 (Android)")
-                    .build()
-            )
-        }
         .build()
 
     /**

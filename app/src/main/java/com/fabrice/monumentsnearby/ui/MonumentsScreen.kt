@@ -59,6 +59,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,11 +80,11 @@ enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
 fun MonumentsScreen(
     state: UiState,
     viewModel: MonumentsViewModel,
-    onLocate: () -> Unit
+    onLocate: () -> Unit,
+    onToggleGeofences: () -> Unit = { viewModel.toggleGeofences() }
 ) {
     val context = LocalContext.current
     val speaker = remember { GuideSpeaker(context) }
-    DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
 
     var selectedTab by remember { mutableStateOf(AppTab.AROUND) }
     var showMap by remember { mutableStateOf(false) }
@@ -183,11 +185,25 @@ fun MonumentsScreen(
                     actions = {
                         // Alerte monuments à proximité (géofencing)
                         val geofencesActive by viewModel.geofencesActive.collectAsStateWithLifecycle()
-                        TextButton(onClick = { viewModel.toggleGeofences() }) {
+                        TextButton(
+                            onClick = onToggleGeofences,
+                            modifier = Modifier.semantics {
+                                contentDescription = if (geofencesActive) {
+                                    "Désactiver l'alerte de proximité"
+                                } else {
+                                    "Activer l'alerte de proximité"
+                                }
+                            }
+                        ) {
                             Text(if (geofencesActive) "🔔" else "🔕")
                         }
                         // Réglages de l'audioguide (voix + vitesse)
-                        TextButton(onClick = { showVoiceDialog = true }) {
+                        TextButton(
+                            onClick = { showVoiceDialog = true },
+                            modifier = Modifier.semantics {
+                                contentDescription = "Réglages de l'audioguide"
+                            }
+                        ) {
                             Text("⚙️")
                         }
                     }
@@ -410,7 +426,8 @@ private fun AroundContent(
                 MonumentsMap(
                     monuments = effective.monuments,
                     centerLat = effective.lat,
-                    centerLon = effective.lon
+                    centerLon = effective.lon,
+                    onSelectMonument = onSelectMonument
                 )
             } else {
                 val visible = if (filter == null) effective.monuments
@@ -436,7 +453,12 @@ private fun AroundContent(
                                 style = MaterialTheme.typography.labelMedium
                             )
                             Row {
-                                TextButton(onClick = { onOpenCamera() }) { Text("📷") }
+                                TextButton(
+                                    onClick = { onOpenCamera() },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Ouvrir la caméra (mode AR et scanner QR)"
+                                    }
+                                ) { Text("📷") }
                                 TextButton(onClick = { showWalk = true }) { Text("🥾 Balade") }
                                 TextButton(onClick = onToggleMap) {
                                     Text(if (showMap) "📋 Liste" else "🗺️ Carte")

@@ -1,12 +1,14 @@
 package com.fabrice.monumentsnearby.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 
 /**
  * Résumés Wikipédia (API REST) — descriptions riches et sourcées.
@@ -19,31 +21,36 @@ object WikipediaClient {
      *  carte tronqué à 3 lignes, mais le texte complet est conservé). */
     private const val MAX_SUMMARY_CHARS = 2000
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .addInterceptor { chain ->
-            chain.proceed(
-                chain.request().newBuilder()
-                    .header("User-Agent", "MonumentsNearby/0.1 (Android)")
-                    .build()
-            )
-        }
-        .build()
+    private val client = Http.client
+
+    /** Nombre maximal de requêtes simultanées vers l'API Wikimedia. */
+    private const val MAX_CONCURRENT = 6
 
     /**
      * Remplace la description par le résumé de l'article Wikipédia quand il existe.
+     * Les requêtes partent en parallèle (plafonnées à [MAX_CONCURRENT] par
+     * politesse envers l'API) : en séquentiel, une ville avec 80 articles
+     * prenait 80 allers-retours réseau bout à bout.
      */
     suspend fun enrich(monuments: List<Monument>): List<Monument> {
         val withTitle = monuments.filter { !it.wikipediaTitle.isNullOrBlank() }
         if (withTitle.isEmpty()) return monuments
         return try {
             withContext(Dispatchers.IO) {
+                val semaphore = Semaphore(MAX_CONCURRENT)
                 monuments.map { m ->
-                    val title = m.wikipediaTitle ?: return@map m
-                    val summary = fetchSummary(title)
-                    if (summary.isNullOrBlank()) m else m.copy(description = summary)
-                }
+                    async {
+                        val title = m.wikipediaTitle ?: return@async m
+                        val summary = semaphore.withPermit {
+                            try {
+                                fetchSummary(title)
+                            } catch (e: Exception) {
+                                null // un échec isolé ne bloque pas les autres
+                            }
+                        }
+                        if (summary.isNullOrBlank()) m else m.copy(description = summary)
+                    }
+                }.awaitAll()
             }
         } catch (e: Exception) {
             monuments // enrichissement non bloquant

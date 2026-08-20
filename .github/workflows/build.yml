@@ -10,6 +10,8 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -51,7 +53,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: app/build/outputs/apk/release/app-release.apk
+          # *.apk : sur un fork (PR) les secrets de signature sont absents →
+          # l'APK s'appelle app-release-unsigned.apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       - name: Publish "latest" release (push on main)

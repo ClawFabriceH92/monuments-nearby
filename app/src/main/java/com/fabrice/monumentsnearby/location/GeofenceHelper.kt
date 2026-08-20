@@ -8,7 +8,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -38,7 +37,6 @@ class GeofenceHelper(private val context: Context) {
         private const val CHANNEL_ID = "geofence"
         private const val RADIUS_M = 200f
         private const val MAX_GEOFENCES = 20
-        private val requestIds = mutableListOf<String>()
 
         /** Les monuments majeurs les plus proches, limités à MAX_GEOFENCES. */
         fun selectMonuments(monuments: List<Monument>): List<Monument> =
@@ -49,6 +47,17 @@ class GeofenceHelper(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** PendingIntent stable : sert au start ET au stop (retirer par IDs ne
+     *  survivait pas à la mort du process, la liste étant en mémoire). */
+    private fun geofencePendingIntent(): PendingIntent {
+        val intent = Intent(context, GeofenceReceiver::class.java).apply {
+            action = ACTION_GEOFENCE
+        }
+        return PendingIntent.getBroadcast(
+            context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     fun start(monuments: List<Monument>) {
         if (!hasPermission() || monuments.isEmpty()) return
         createChannel()
@@ -58,7 +67,6 @@ class GeofenceHelper(private val context: Context) {
                 .setCircularRegion(m.lat, m.lon, RADIUS_M)
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
                 .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
-                .setLoiteringDelay(3000)
                 .build()
         }
         // Mapper requestId → nom du monument (lu par le receiver)
@@ -72,22 +80,11 @@ class GeofenceHelper(private val context: Context) {
             .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
             .addGeofences(geofences)
             .build()
-        val intent = Intent(context, GeofenceReceiver::class.java).apply {
-            action = ACTION_GEOFENCE
-        }
-        val pending = PendingIntent.getBroadcast(
-            context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        client.addGeofences(request, pending)
-        requestIds.clear()
-        requestIds.addAll(geofences.map { it.requestId })
+        client.addGeofences(request, geofencePendingIntent())
     }
 
     fun stop() {
-        if (requestIds.isNotEmpty()) {
-            client.removeGeofences(requestIds)
-            requestIds.clear()
-        }
+        client.removeGeofences(geofencePendingIntent())
     }
 
     private fun createChannel() {
@@ -122,11 +119,9 @@ class GeofenceReceiver : BroadcastReceiver() {
             ?: "Monument à proximité"
 
         val channelId = "geofence"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(channelId, "Monuments à proximité", NotificationManager.IMPORTANCE_HIGH)
-            )
-        }
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(channelId, "Monuments à proximité", NotificationManager.IMPORTANCE_HIGH)
+        )
 
         val tapIntent = Intent(context, MainActivity::class.java)
         val pending = PendingIntent.getActivity(

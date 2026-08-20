@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -92,26 +93,39 @@ fun CameraScreen(
         object : SensorEventListener {
             val rotation = FloatArray(9)
             val orientation = FloatArray(3)
+
+            // getRotationMatrix() exige gravité ET champ magnétique simultanés :
+            // on mémorise la dernière valeur de chaque capteur avant de combiner.
+            val gravity = FloatArray(3)
+            val geomagnetic = FloatArray(3)
+            var hasGravity = false
+            var hasGeomagnetic = false
+
             override fun onSensorChanged(event: SensorEvent) {
                 when (event.sensor.type) {
-                    Sensor.TYPE_ACCELEROMETER -> {
-                        SensorManager.getRotationMatrix(
-                            rotation, null,
-                            floatArrayOf(event.values[0], event.values[1], event.values[2]),
-                            FloatArray(3)
-                        )
+                    Sensor.TYPE_ROTATION_VECTOR -> {
+                        SensorManager.getRotationMatrixFromVector(rotation, event.values)
                         SensorManager.getOrientation(rotation, orientation)
                         azimuth = (Math.toDegrees(orientation[0].toDouble()) + 360).toFloat() % 360
+                    }
+                    Sensor.TYPE_ACCELEROMETER -> {
+                        event.values.copyInto(gravity)
+                        hasGravity = true
+                        updateFromGravityAndMagnetic()
                     }
                     Sensor.TYPE_MAGNETIC_FIELD -> {
-                        SensorManager.getRotationMatrix(
-                            rotation, null,
-                            FloatArray(3),
-                            floatArrayOf(event.values[0], event.values[1], event.values[2])
-                        )
-                        SensorManager.getOrientation(rotation, orientation)
-                        azimuth = (Math.toDegrees(orientation[0].toDouble()) + 360).toFloat() % 360
+                        event.values.copyInto(geomagnetic)
+                        hasGeomagnetic = true
+                        updateFromGravityAndMagnetic()
                     }
+                }
+            }
+
+            fun updateFromGravityAndMagnetic() {
+                if (!hasGravity || !hasGeomagnetic) return
+                if (SensorManager.getRotationMatrix(rotation, null, gravity, geomagnetic)) {
+                    SensorManager.getOrientation(rotation, orientation)
+                    azimuth = (Math.toDegrees(orientation[0].toDouble()) + 360).toFloat() % 360
                 }
             }
 
@@ -120,16 +134,23 @@ fun CameraScreen(
     }
 
     DisposableEffect(Unit) {
-        sensorManager.registerListener(
-            sensorListener,
-            sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER),
-            SensorManager.SENSOR_DELAY_UI
-        )
-        sensorManager.registerListener(
-            sensorListener,
-            sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD),
-            SensorManager.SENSOR_DELAY_UI
-        )
+        // Capteur de rotation fusionné (plus précis) quand il existe,
+        // sinon combinaison accéléromètre + magnétomètre.
+        val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        if (rotationSensor != null) {
+            sensorManager.registerListener(sensorListener, rotationSensor, SensorManager.SENSOR_DELAY_UI)
+        } else {
+            sensorManager.registerListener(
+                sensorListener,
+                sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER),
+                SensorManager.SENSOR_DELAY_UI
+            )
+            sensorManager.registerListener(
+                sensorListener,
+                sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD),
+                SensorManager.SENSOR_DELAY_UI
+            )
+        }
         onDispose { sensorManager.unregisterListener(sensorListener) }
     }
 
@@ -152,7 +173,7 @@ fun CameraScreen(
         topBar = {
             Row(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -247,71 +268,80 @@ private fun CameraPreview(
 ) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient() }
-    var bound by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val previewView = remember {
+        PreviewView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+    }
 
+    // (Re)bind de la caméra à chaque bascule AR ↔ QR : la factory d'AndroidView
+    // ne s'exécute qu'une fois, le bind doit donc vivre dans un effet à part.
     DisposableEffect(qrMode) {
-        bound = false
-        onDispose { executor.shutdown() }
+        val providerFuture = ProcessCameraProvider.getInstance(context)
+        providerFuture.addListener({
+            val provider = providerFuture.get()
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
+            val selector = CameraSelector.DEFAULT_BACK_CAMERA
+            try {
+                provider.unbindAll()
+                if (qrMode) {
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(executor) { imageProxy ->
+                        val mediaImage = imageProxy.image
+                        if (mediaImage != null) {
+                            val inputImage = InputImage.fromMediaImage(
+                                mediaImage, imageProxy.imageInfo.rotationDegrees
+                            )
+                            scanner.process(inputImage)
+                                .addOnSuccessListener { barcodes ->
+                                    for (barcode in barcodes) {
+                                        val raw = barcode.rawValue ?: continue
+                                        val qid = Regex("Q\\d+").find(raw)?.value
+                                        if (qid != null) {
+                                            onQrFound(qid)
+                                            break
+                                        }
+                                    }
+                                }
+                                .addOnCompleteListener { imageProxy.close() }
+                        } else {
+                            imageProxy.close()
+                        }
+                    }
+                    provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+                } else {
+                    provider.bindToLifecycle(lifecycleOwner, selector, preview)
+                }
+            } catch (e: Exception) {
+                Log.e("CameraScreen", "Erreur caméra", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
+        onDispose { }
+    }
+
+    // À la fermeture de l'écran : libérer la caméra (sinon elle reste allumée,
+    // le bind est attaché au lifecycle de l'activité) et les ressources.
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                ProcessCameraProvider.getInstance(context).get().unbindAll()
+            } catch (_: Exception) {
+            }
+            scanner.close()
+            executor.shutdown()
+        }
     }
 
     AndroidView(
-        factory = { ctx ->
-            PreviewView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                val providerFuture = ProcessCameraProvider.getInstance(ctx)
-                providerFuture.addListener({
-                    val provider = providerFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(this.surfaceProvider)
-                    }
-                    val selector = CameraSelector.DEFAULT_BACK_CAMERA
-                    try {
-                        if (qrMode) {
-                            val analysis = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                .build()
-                            analysis.setAnalyzer(executor) { imageProxy ->
-                                val mediaImage = imageProxy.image
-                                if (mediaImage != null) {
-                                    val inputImage = InputImage.fromMediaImage(
-                                        mediaImage, imageProxy.imageInfo.rotationDegrees
-                                    )
-                                    scanner.process(inputImage)
-                                        .addOnSuccessListener { barcodes ->
-                                            for (barcode in barcodes) {
-                                                val raw = barcode.rawValue ?: continue
-                                                val qid = Regex("Q\\d+").find(raw)?.value
-                                                if (qid != null) {
-                                                    onQrFound(qid)
-                                                    break
-                                                }
-                                            }
-                                        }
-                                        .addOnCompleteListener { imageProxy.close() }
-                                } else {
-                                    imageProxy.close()
-                                }
-                            }
-                            provider.unbindAll()
-                            provider.bindToLifecycle(
-                                lifecycleOwner,
-                                selector, preview, analysis
-                            )
-                        } else {
-                            provider.unbindAll()
-                            provider.bindToLifecycle(lifecycleOwner, selector, preview)
-                        }
-                        bound = true
-                    } catch (e: Exception) {
-                        Log.e("CameraScreen", "Erreur caméra", e)
-                    }
-                }, ContextCompat.getMainExecutor(ctx))
-            }
-        },
+        factory = { previewView },
         modifier = Modifier.fillMaxSize()
     )
 }

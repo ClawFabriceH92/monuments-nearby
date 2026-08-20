@@ -37,6 +37,9 @@ class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private val backgroundLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         UpdateManager.start(this)
@@ -56,7 +59,8 @@ class MainActivity : ComponentActivity() {
                 MonumentsScreen(
                     state = state,
                     viewModel = viewModel,
-                    onLocate = { locateAndLoad() }
+                    onLocate = { locateAndLoad() },
+                    onToggleGeofences = { toggleGeofences() }
                 )
             }
         }
@@ -76,9 +80,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // FINE ou COARSE : sur Android 12+, l'utilisateur peut n'accorder que la
+    // position approximative — la refuser relancerait la demande en boucle.
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Active/désactive l'alerte de proximité. Les geofences ne se déclenchent
+     * en arrière-plan qu'avec ACCESS_BACKGROUND_LOCATION : on la demande à
+     * l'activation (l'alerte fonctionne quand même app ouverte en attendant).
+     */
+    private fun toggleGeofences() {
+        val enabling = !viewModel.geofencesActive.value
+        if (enabling &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+        viewModel.toggleGeofences()
+    }
 
     private fun locateAndLoad() {
         if (!hasLocationPermission()) {

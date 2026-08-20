@@ -4,25 +4,28 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 /**
- * Boucle de mise à jour automatique (pattern validé Vigie, générique).
+ * Mise à jour automatique via GitHub Releases.
  * - Vérification immédiate au lancement
- * - Puis créneau quotidien à 14h00 (boucle légère toutes les 30 s)
+ * - Puis vérification quotidienne vers 14h00 planifiée par WorkManager
+ *   (fonctionne même app fermée, sans boucle de polling)
  * - Téléchargement auto si permission "installer des apps inconnues" OK,
  *   sinon notification avec action vers l'écran d'autorisation.
  * - Activable/désactivable via SharedPreferences ("autoUpdate", défaut true).
@@ -32,7 +35,7 @@ object UpdateManager {
     private const val PREFS = "monuments-nearbyupdate"
     private const val KEY_AUTO = "autoUpdate"
     private const val CHANNEL_ID = "com.fabrice.monumentsnearby.updates"
-    private const val TAG = "Monuments NearbyUpdate"
+    private const val WORK_NAME = "update-check"
 
     private var started = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -51,39 +54,51 @@ object UpdateManager {
         started = true
         val appContext = context.applicationContext
         ensureChannel(appContext)
+        // Vérification immédiate au lancement
         scope.launch {
-            // Vérification immédiate au lancement
-            if (autoUpdateEnabled(appContext)) checkOnce(appContext)
-            while (isActive) {
-                val now = Calendar.getInstance()
-                if (autoUpdateEnabled(appContext) &&
-                    now.get(Calendar.HOUR_OF_DAY) == 14 && now.get(Calendar.MINUTE) == 0
-                ) {
-                    checkOnce(appContext)
-                    delay(61_000) // évite les doubles déclenchements dans la même minute
-                } else {
-                    delay(30_000)
-                }
-            }
+            if (autoUpdateEnabled(appContext)) performCheck(appContext)
         }
+        // Vérification quotidienne (WorkManager persiste après fermeture/reboot)
+        val request = PeriodicWorkRequestBuilder<UpdateWorker>(24, TimeUnit.HOURS)
+            .setInitialDelay(millisUntilNextTwoPm(), TimeUnit.MILLISECONDS)
+            .setConstraints(
+                Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+            )
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
+            WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request
+        )
     }
 
     /** Vérifie GitHub Releases et télécharge si une MAJ existe. Peut être appelé par un bouton "Vérifier maintenant". */
     fun checkNow(context: Context) {
-        checkOnce(context.applicationContext)
+        val appContext = context.applicationContext
+        scope.launch { performCheck(appContext) }
     }
 
-    private fun checkOnce(context: Context) {
-        scope.launch {
-            val info = withContext(Dispatchers.IO) { UpdateChecker.latestWithApk() } ?: return@launch
-            val current = currentVersion(context)
-            if (UpdateChecker.compareVersions(info.versionName, current) <= 0) return@launch
-            if (AutoUpdater.canRequestInstalls(context)) {
-                AutoUpdater.download(context, info.downloadUrl)
-            } else {
-                notifyPermissionNeeded(context, info)
-            }
+    /** Cœur de la vérification : appelé au lancement, par le worker et à la demande. */
+    internal suspend fun performCheck(context: Context) {
+        val info = withContext(Dispatchers.IO) { UpdateChecker.latestWithApk() } ?: return
+        val current = currentVersion(context)
+        if (UpdateChecker.compareVersions(info.versionName, current) <= 0) return
+        if (AutoUpdater.canRequestInstalls(context)) {
+            AutoUpdater.download(context, info.downloadUrl)
+        } else {
+            notifyPermissionNeeded(context, info)
         }
+    }
+
+    /** Millisecondes jusqu'au prochain 14h00 (aujourd'hui ou demain). */
+    private fun millisUntilNextTwoPm(): Long {
+        val now = Calendar.getInstance()
+        val next = (now.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, 14)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (timeInMillis <= now.timeInMillis) add(Calendar.DAY_OF_YEAR, 1)
+        }
+        return next.timeInMillis - now.timeInMillis
     }
 
     private fun currentVersion(context: Context): String = try {
@@ -93,7 +108,6 @@ object UpdateManager {
     }
 
     private fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
             NotificationChannel(

@@ -57,8 +57,14 @@ object UpdateChecker {
                     if (!name.endsWith(".apk")) continue
                     val url = asset.optString("browser_download_url", "")
                     if (url.isEmpty()) continue
+                    // Tag versionné (v0.7.2) sinon version extraite du nom de
+                    // l'APK : la release roulante "latest" (push sur main) n'a
+                    // pas de tag numérique et était ignorée par l'auto-update.
+                    val version = tag.takeIf { it.firstOrNull()?.isDigit() == true }
+                        ?: versionFromAssetName(name)
+                        ?: continue
                     val info = UpdateInfo(
-                        versionName = tag,
+                        versionName = version,
                         downloadUrl = url,
                         notes = rel.optString("body").takeIf { it.isNotBlank() },
                         publishedAt = rel.optString("published_at").takeIf { it.isNotBlank() },
@@ -74,6 +80,10 @@ object UpdateChecker {
             null // JSON invalide → pas de mise à jour
         }
     }
+
+    /** "monuments-nearby-v0.7.2.apk" → "0.7.2". Null si aucun numéro de version. */
+    internal fun versionFromAssetName(name: String): String? =
+        Regex("(\\d+(?:\\.\\d+)+)").find(name)?.value
 
     /** Compare deux versions "x.y.z" (segments numériques). >0 si a > b. */
     fun compareVersions(a: String, b: String): Int {

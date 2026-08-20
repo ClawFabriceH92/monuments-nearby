@@ -10,6 +10,9 @@ import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.location.GeofenceHelper
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -136,16 +139,33 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Recherche un musée par nom (barre de recherche du mode Musée). */
+    private var searchJob: Job? = null
+
+    /**
+     * Recherche un musée par nom (barre de recherche du mode Musée).
+     * Debounce 300 ms + annulation de la recherche précédente : sans cela,
+     * chaque frappe part en requête et les réponses arrivées dans le désordre
+     * peuvent écraser les résultats de la requête la plus récente.
+     */
     fun searchMuseums(query: String) {
-        viewModelScope.launch {
-            _searching.value = true
-            _museumResults.value = try {
-                WikidataClient.searchMuseums(query)
-            } catch (e: Exception) {
-                emptyList()
-            }
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _museumResults.value = emptyList()
             _searching.value = false
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(300)
+            _searching.value = true
+            try {
+                _museumResults.value = WikidataClient.searchMuseums(query)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _museumResults.value = emptyList()
+            } finally {
+                _searching.value = false
+            }
         }
     }
 
@@ -246,12 +266,19 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Charge la galerie Commons du monument sélectionné (P373 → catégorie). */
+    private var imagesJob: Job? = null
+
+    /**
+     * Charge la galerie Commons du monument sélectionné (P373 → catégorie).
+     * Annule le chargement précédent : si on ferme la fiche A et ouvre la
+     * fiche B pendant le chargement, B n'affichera pas les photos de A.
+     */
     fun loadMonumentImages(monument: Monument) {
-        if (_loadingImages.value) return
+        imagesJob?.cancel()
+        _monumentImages.value = emptyList()
         _loadingImages.value = true
-        viewModelScope.launch {
-            _monumentImages.value = try {
+        imagesJob = viewModelScope.launch {
+            val images = try {
                 // 1) Images directes de la catégorie Commons (P373)
                 val category = monument.commonsCategory
                 val fromCategory = category?.let { WikidataClient.fetchCommonsCategoryImages(it) }
@@ -263,14 +290,18 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                     val query = monument.wikipediaTitle ?: monument.name
                     WikidataClient.fetchCommonsSearchImages(query)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 emptyList()
             }
+            _monumentImages.value = images
             _loadingImages.value = false
         }
     }
 
     fun clearMonumentImages() {
+        imagesJob?.cancel()
         _monumentImages.value = emptyList()
         _loadingImages.value = false
     }
