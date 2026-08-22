@@ -460,8 +460,9 @@ private fun FilterBar(selected: String?, onSelect: (String?) -> Unit) {
 }
 
 /**
- * Ligne « X monuments trouvés » + boutons (tri, caméra, balade, liste/carte),
- * affichée au-dessus de la liste comme de la carte.
+ * En-tête « X monuments trouvés » + boutons (tri, caméra, balade, liste/carte),
+ * affiché au-dessus de la liste comme de la carte. Sur deux lignes pour que
+ * tout reste visible sur les écrans étroits (les boutons défilent au besoin).
  */
 @Composable
 private fun AroundToolbar(
@@ -473,16 +474,17 @@ private fun AroundToolbar(
     showMap: Boolean,
     onToggleMap: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             "$count monuments trouvés",
             style = MaterialTheme.typography.labelMedium
         )
-        Row {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             TextButton(
                 onClick = onToggleSort,
                 modifier = Modifier.semantics {

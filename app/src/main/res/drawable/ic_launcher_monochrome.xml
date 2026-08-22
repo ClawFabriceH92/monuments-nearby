@@ -4,26 +4,31 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Monochrome (launchers thématisés Android 13+) : même temple -->
+    <!-- Monochrome (launchers thématisés Android 13+) : même temple raffiné -->
+
+    <!-- Fronton -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,22 L34,46 L74,46 Z" />
+        android:pathData="M54,30 L73.5,44 L34.5,44 Z" />
+
+    <!-- Architrave + frise -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M34,46 L74,46 L74,53 L34,53 Z" />
+        android:pathData="M35,44.5 H73 V50 H35 Z" />
+
+    <!-- Colonnes : chapiteau, fût, base -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M37,53 L41,53 L41,72 L37,72 Z" />
+        android:pathData="M35.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                          M45.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                          M55.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                          M65.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z" />
+
+    <!-- Stéréobate : deux degrés -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M48,53 L52,53 L52,72 L48,72 Z" />
+        android:pathData="M33.5,70.2 H74.5 V74 H33.5 Z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M56,53 L60,53 L60,72 L56,72 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M67,53 L71,53 L71,72 L67,72 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M32,74 L76,74 L76,81 L32,81 Z" />
+        android:pathData="M31.5,74 H76.5 V77.8 H31.5 Z" />
 </vector>
