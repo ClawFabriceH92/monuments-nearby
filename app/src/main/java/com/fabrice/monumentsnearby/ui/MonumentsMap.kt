@@ -6,6 +6,7 @@ import android.graphics.Paint
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,7 +45,9 @@ fun MonumentsMap(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val mapView = remember {
+    // Re-clé sur la liste : les marqueurs sont reconstruits si le filtre change
+    // pendant que la carte est affichée.
+    val mapView = remember(monuments) {
         // User-Agent requis par les serveurs de tuiles OSM
         Configuration.getInstance().userAgentValue = context.packageName
         MapView(context).apply {
@@ -89,7 +92,7 @@ fun MonumentsMap(
 
     // Itinéraire de balade : ligne or position → étapes, ajoutée/retirée
     // dynamiquement (la MapView est mémorisée, pas recréée).
-    DisposableEffect(walkRoute) {
+    DisposableEffect(mapView, walkRoute) {
         val polyline = walkRoute?.takeIf { it.isNotEmpty() }?.let { stops ->
             Polyline(mapView).apply {
                 setPoints(
@@ -114,7 +117,7 @@ fun MonumentsMap(
     }
 
     // Relayer resume/pause à osmdroid (tuiles, capteurs) et détacher à la sortie
-    DisposableEffect(Unit) {
+    DisposableEffect(mapView) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -129,10 +132,14 @@ fun MonumentsMap(
         }
     }
 
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { mapView }
-    )
+    // key : AndroidView ne ré-exécute pas sa factory quand mapView change,
+    // il faut recréer le nœud pour attacher la nouvelle vue.
+    key(mapView) {
+        AndroidView(
+            modifier = modifier.fillMaxSize(),
+            factory = { mapView }
+        )
+    }
 }
 
 private const val WALK_5MIN_M = 400

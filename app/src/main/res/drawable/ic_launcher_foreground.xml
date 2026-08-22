@@ -1,37 +1,87 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Petit temple grec stylisé : fronton, architrave, 4 colonnes, base -->
+    <!--
+      Temple grec doré, version raffinée : fronton avec tympan en retrait,
+      architrave et frise, 4 colonnes avec chapiteaux et bases, stéréobate
+      à deux degrés. Or en dégradé (lumière en haut) sur le fond bleu nuit.
+      Tout tient dans la zone sûre (cercle central de 66 dp).
+    -->
 
-    <!-- Fronton (toit triangulaire) -->
+    <!-- Fronton -->
+    <path android:pathData="M54,30 L73.5,44 L34.5,44 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="28"
+                android:endX="54" android:endY="80"
+                android:startColor="#F6D97F"
+                android:endColor="#D3A439" />
+        </aapt:attr>
+    </path>
+    <!-- Tympan en retrait (ombre) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,22 L34,46 L74,46 Z" />
+        android:fillColor="#8A6A24"
+        android:pathData="M54,34.6 L66,43 L42,43 Z" />
 
-    <!-- Architrave (poutre sous le fronton) -->
+    <!-- Architrave -->
+    <path android:pathData="M35,44.5 H73 V48.5 H35 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="28"
+                android:endX="54" android:endY="80"
+                android:startColor="#F6D97F"
+                android:endColor="#D3A439" />
+        </aapt:attr>
+    </path>
+    <!-- Frise (ligne d'ombre sous l'architrave) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M34,46 L74,46 L74,53 L34,53 Z" />
+        android:fillColor="#8A6A24"
+        android:pathData="M35,48.5 H73 V50 H35 Z" />
 
-    <!-- Colonnes -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M37,53 L41,53 L41,72 L37,72 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M48,53 L52,53 L52,72 L48,72 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M56,53 L60,53 L60,72 L56,72 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M67,53 L71,53 L71,72 L67,72 Z" />
+    <!-- Colonnes : chapiteau, fût, base -->
+    <path android:pathData="M35.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                            M45.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                            M55.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z
+                            M65.5,50 h7 v2.2 h-1.2 v15.8 h1.2 v2.2 h-7 v-2.2 h1.2 v-15.8 h-1.2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="28"
+                android:endX="54" android:endY="80"
+                android:startColor="#F6D97F"
+                android:endColor="#D3A439" />
+        </aapt:attr>
+    </path>
 
-    <!-- Base (stéréobate) -->
+    <!-- Stéréobate : deux degrés -->
+    <path android:pathData="M33.5,70.2 H74.5 V74 H33.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="28"
+                android:endX="54" android:endY="80"
+                android:startColor="#F6D97F"
+                android:endColor="#D3A439" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M31.5,74 H76.5 V77.8 H31.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="28"
+                android:endX="54" android:endY="80"
+                android:startColor="#F6D97F"
+                android:endColor="#D3A439" />
+        </aapt:attr>
+    </path>
+    <!-- Ombre entre les deux degrés -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M32,74 L76,74 L76,81 L32,81 Z" />
+        android:fillColor="#8A6A24"
+        android:pathData="M33.5,74 H74.5 V74.9 H33.5 Z" />
 </vector>
