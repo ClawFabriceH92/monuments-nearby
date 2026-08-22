@@ -70,6 +70,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -83,10 +85,14 @@ import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.location.GuidedVisitBus
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import com.fabrice.monumentsnearby.ui.theme.CategoryColors
+import com.fabrice.monumentsnearby.update.AutoUpdater
+import com.fabrice.monumentsnearby.update.UpdateChecker
 import com.fabrice.monumentsnearby.update.UpdateManager
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1577,15 +1583,43 @@ private fun SettingsDialog(
     val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
     val dailyDiscovery by viewModel.dailyDiscovery.collectAsStateWithLifecycle()
     var autoUpdate by remember { mutableStateOf(UpdateManager.autoUpdateEnabled(context)) }
-    var checkLaunched by remember { mutableStateOf(false) }
     var selectedSpeed by remember { mutableStateOf(speaker.currentSpeed) }
     var selectedVoice by remember { mutableStateOf(speaker.currentVoice) }
+    val scope = rememberCoroutineScope()
+    var updating by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    // Plein écran : la fenêtre de réglages occupe toute la place disponible
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Réglages") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "⚙️ Réglages",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onDismiss) { Text("✕ Fermer", color = Color.White) }
+                }
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                ) {
                 // --- Rayon de recherche ---
                 Text(
                     "Rayon de recherche",
@@ -1655,11 +1689,18 @@ private fun SettingsDialog(
                     color = MaterialTheme.colorScheme.primary
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Mise à jour automatique",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Téléchargement et installation automatiques",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "Vérifie chaque jour et installe la nouvelle version " +
+                                "dès qu'elle est publiée sur GitHub.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Switch(
                         checked = autoUpdate,
                         onCheckedChange = {
@@ -1668,15 +1709,61 @@ private fun SettingsDialog(
                         }
                     )
                 }
+                if (!AutoUpdater.canRequestInstalls(context)) {
+                    // Sans cette permission système, l'installation auto est bloquée
+                    TextButton(onClick = { AutoUpdater.openInstallSettings(context) }) {
+                        Text("🔓 Autoriser l'installation automatique des mises à jour")
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        updating = true
+                        updateStatus = "Vérification de la dernière version…"
+                        scope.launch {
+                            val info = withContext(Dispatchers.IO) { UpdateChecker.latestWithApk() }
+                            updating = false
+                            updateStatus = when {
+                                info == null ->
+                                    "Vérification impossible (pas de réseau ?)."
+                                UpdateChecker.compareVersions(
+                                    info.versionName, BuildConfig.VERSION_NAME
+                                ) <= 0 ->
+                                    "✓ Déjà à jour (v${BuildConfig.VERSION_NAME})."
+                                !AutoUpdater.canRequestInstalls(context) -> {
+                                    AutoUpdater.openInstallSettings(context)
+                                    "Autorise d'abord l'installation, puis réessaie."
+                                }
+                                AutoUpdater.download(context, info.downloadUrl) ->
+                                    "⬇ v${info.versionName} en téléchargement — " +
+                                        "installation automatique à la fin."
+                                else ->
+                                    "Téléchargement impossible pour le moment."
+                            }
+                        }
+                    },
+                    enabled = !updating,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (updating) "Vérification…"
+                        else "⬇ Vérifier et installer maintenant"
+                    )
+                }
+                updateStatus?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 TextButton(
                     onClick = {
-                        UpdateManager.checkNow(context)
-                        checkLaunched = true
-                    },
-                    enabled = !checkLaunched
-                ) {
-                    Text(if (checkLaunched) "✓ Vérification lancée" else "Vérifier maintenant")
-                }
+                        openWebsite(
+                            context,
+                            "https://github.com/ClawFabriceH92/monuments-nearby/releases"
+                        )
+                    }
+                ) { Text("📦 Télécharger l'APK sur GitHub") }
                 Spacer(Modifier.height(14.dp))
 
                 // --- Audioguide ---
@@ -1751,13 +1838,10 @@ private fun SettingsDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                }
             }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Fermer") }
         }
-    )
+    }
 }
 
 private fun formatRate(rate: Float): String = if (rate == 1f) "1×" else "${rate}×"
