@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -129,6 +130,29 @@ fun MonumentsScreen(
         if (success != null) lastTitle = success.title
     }
     val isMuseumMode = success?.mode == AppMode.MUSEUM
+
+    // Navigation retour (bouton/geste système) : on remonte la hiérarchie
+    // écran par écran au lieu de quitter l'app — fiche → écran précédent,
+    // caméra → retour, œuvres d'un musée → recherche, carte → liste,
+    // autre onglet → Autour de moi. Sans état à dépiler, le retour quitte.
+    BackHandler(
+        enabled = selectedMonument != null || showCamera || showMap ||
+            selectedTab != AppTab.AROUND
+    ) {
+        when {
+            selectedMonument != null -> {
+                selectedMonument = null
+                viewModel.clearMonumentImages()
+            }
+            showCamera -> showCamera = false
+            selectedTab == AppTab.MUSEUMS && !showMuseumSearch -> {
+                showMuseumSearch = true
+                selectedMuseum = null
+            }
+            selectedTab != AppTab.AROUND -> selectedTab = AppTab.AROUND
+            showMap -> showMap = false
+        }
+    }
 
     DisposableEffect(Unit) {
         speaker.onFinished = {
@@ -483,8 +507,20 @@ private fun AroundToolbar(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // Sélecteur de vue : l'état courant est visible, un tap bascule
+            FilterChip(
+                selected = !showMap,
+                onClick = { if (showMap) onToggleMap() },
+                label = { Text("📋 Liste") }
+            )
+            FilterChip(
+                selected = showMap,
+                onClick = { if (!showMap) onToggleMap() },
+                label = { Text("🗺️ Carte") }
+            )
             TextButton(
                 onClick = onToggleSort,
                 modifier = Modifier.semantics {
@@ -502,9 +538,6 @@ private fun AroundToolbar(
                 }
             ) { Text("📷") }
             TextButton(onClick = onShowWalk) { Text("🥾 Balade") }
-            TextButton(onClick = onToggleMap) {
-                Text(if (showMap) "📋 Liste" else "🗺️ Carte")
-            }
         }
     }
 }
@@ -580,13 +613,18 @@ private fun AroundContent(
                                 onSelectMonument = onSelectMonument,
                                 walkRoute = walkStops?.map { it.monument }
                             )
-                            if (walkStops != null) {
-                                Button(
-                                    onClick = { walkStops = null },
-                                    modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(10.dp)
-                                ) { Text("✕ Itinéraire") }
+                            // Retour toujours visible sur la carte (le geste
+                            // retour système ramène aussi à la liste)
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(onClick = onToggleMap) { Text("← Liste") }
+                                if (walkStops != null) {
+                                    Button(onClick = { walkStops = null }) { Text("✕ Itinéraire") }
+                                }
                             }
                         }
                     }
