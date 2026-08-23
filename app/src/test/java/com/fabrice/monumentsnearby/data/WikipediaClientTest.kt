@@ -25,9 +25,19 @@ class WikipediaClientTest {
 
     @Test
     fun `les sous-sections sont traitees comme des titres`() {
+        // Le titre garde sa propre ligne, le texte de la section suit dessous
         val clean = WikipediaClient.cleanArticleText("=== La nef ===\nElle mesure 30 mètres.")
 
-        assertEquals("La nef.\n\nElle mesure 30 mètres.", clean)
+        assertEquals("La nef.\nElle mesure 30 mètres.", clean)
+    }
+
+    @Test
+    fun `une ligne vide separe deux sections`() {
+        val raw = "Texte d'introduction.\n\n== Histoire ==\nUn siècle plus tard."
+
+        val clean = WikipediaClient.cleanArticleText(raw)
+
+        assertEquals("Texte d'introduction.\n\nHistoire.\nUn siècle plus tard.", clean)
     }
 
     @Test
