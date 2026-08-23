@@ -21,20 +21,27 @@ import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import org.json.JSONObject
 
+/** Monument dont on vient d'entrer dans le rayon d'alerte. */
+data class NearbyAlert(
+    val id: String,
+    val name: String,
+    val description: String?
+)
+
 /**
- * Visite guidée : quand l'app est ouverte et que l'option est activée,
- * l'entrée dans une geofence déclenche la lecture audio de la fiche.
- * L'UI (MonumentsScreen) enregistre le listener ; le receiver l'invoque.
+ * Proximité : l'entrée dans une geofence prévient l'UI quand l'app est
+ * ouverte — pop-up « tu es à moins de 100 m », et lecture audio automatique
+ * si la visite guidée est activée. MonumentsScreen enregistre le listener.
  */
 object GuidedVisitBus {
-    /** (nom, description) — invoqué sur le thread principal. */
+    /** Invoqué sur le thread principal à l'entrée dans un rayon d'alerte. */
     @Volatile
-    var listener: ((String, String?) -> Unit)? = null
+    var listener: ((NearbyAlert) -> Unit)? = null
 }
 
 /**
- * Géofencing des monuments majeurs : alerte par notification quand on entre
- * dans un rayon de 200 m autour d'un monument. Max 20 geofences (limite Play).
+ * Géofencing des monuments les plus proches : alerte quand on entre dans un
+ * rayon de 100 m autour d'un monument. Max 20 geofences (limite Play).
  */
 class GeofenceHelper(private val context: Context) {
 
@@ -46,12 +53,21 @@ class GeofenceHelper(private val context: Context) {
         const val ACTION_GEOFENCE = "com.fabrice.monumentsnearby.GEOFENCE"
         const val EXTRA_NAME = "monument_name"
         private const val CHANNEL_ID = "geofence"
-        private const val RADIUS_M = 200f
+        /** 100 m : rayon d'alerte. En dessous, le géofencing Play devient
+         *  imprécis (recommandation Google : ne pas descendre sous 100 m). */
+        const val RADIUS_M = 100f
         private const val MAX_GEOFENCES = 20
 
-        /** Les monuments majeurs les plus proches, limités à MAX_GEOFENCES. */
-        fun selectMonuments(monuments: List<Monument>): List<Monument> =
-            monuments.filter { it.important }.sortedBy { it.distanceM }.take(MAX_GEOFENCES)
+        /**
+         * Les monuments à surveiller : majeurs d'abord (ils ont une fiche
+         * riche), complétés par les plus proches jusqu'à MAX_GEOFENCES —
+         * avant, seuls les majeurs déclenchaient une alerte.
+         */
+        fun selectMonuments(monuments: List<Monument>): List<Monument> {
+            val majors = monuments.filter { it.important }.sortedBy { it.distanceM }
+            val others = monuments.filter { !it.important }.sortedBy { it.distanceM }
+            return (majors + others).take(MAX_GEOFENCES)
+        }
     }
 
     fun hasPermission(): Boolean =
@@ -80,14 +96,15 @@ class GeofenceHelper(private val context: Context) {
                 .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
                 .build()
         }
-        // Mapper requestId → {nom, description} (lu par le receiver pour la
-        // notification et la lecture audio de la visite guidée)
+        // Mapper requestId → {id, nom, description} (lu par le receiver pour la
+        // notification, le pop-up de proximité et la lecture audio)
         val names = JSONObject()
         geofences.forEachIndexed { index, g ->
             val m = monuments[index]
             names.put(
                 g.requestId,
                 JSONObject()
+                    .put("i", m.id)
                     .put("n", m.name)
                     .put("d", m.description?.take(1200) ?: "")
             )
@@ -134,11 +151,14 @@ class GeofenceReceiver : BroadcastReceiver() {
             JSONObject()
         }
         var description: String? = null
+        var id: String? = null
         val name = event.triggeringGeofences
             ?.firstNotNullOfOrNull { geofence ->
                 when (val entry = names.opt(geofence.requestId)) {
                     is JSONObject -> entry.optString("n").takeIf { it.isNotBlank() }?.also {
                         description = entry.optString("d").takeIf { d -> d.isNotBlank() }
+                        id = entry.optString("i").takeIf { i -> i.isNotBlank() }
+                            ?: geofence.requestId.removePrefix("monument_")
                     }
                     is String -> entry.takeIf { it.isNotBlank() }
                     else -> null
@@ -146,13 +166,11 @@ class GeofenceReceiver : BroadcastReceiver() {
             }
             ?: "Monument à proximité"
 
-        // Visite guidée : lecture audio automatique si l'option est activée
-        // et que l'app est ouverte (listener enregistré par l'UI).
-        if (context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .getBoolean("guidedVisit", false)
-        ) {
-            GuidedVisitBus.listener?.invoke(name, description)
-        }
+        // Pop-up de proximité (et lecture audio si la visite guidée est
+        // activée) : l'UI décide, elle sait si l'app est au premier plan.
+        GuidedVisitBus.listener?.invoke(
+            NearbyAlert(id = id ?: name, name = name, description = description)
+        )
 
         val channelId = "geofence"
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -166,7 +184,7 @@ class GeofenceReceiver : BroadcastReceiver() {
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_pin_bleu)
             .setContentTitle("🏛 $name")
-            .setContentText("Tu es à moins de 200 m — regarde la fiche !")
+            .setContentText("Tu es à moins de 100 m — regarde la fiche !")
             .setContentIntent(pending)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

@@ -108,14 +108,62 @@ object WikipediaClient {
             while (keys.hasNext()) {
                 val page = pages.optJSONObject(keys.next()) ?: continue
                 val extract = page.optString("extract").takeIf { it.isNotBlank() } ?: continue
-                return if (extract.length > MAX_ARTICLE_CHARS) {
-                    extract.take(MAX_ARTICLE_CHARS).trimEnd() + "…"
+                val clean = cleanArticleText(extract)
+                if (clean.isBlank()) continue
+                return if (clean.length > MAX_ARTICLE_CHARS) {
+                    clean.take(MAX_ARTICLE_CHARS).trimEnd() + "…"
                 } else {
-                    extract
+                    clean
                 }
             }
             return null
         }
+    }
+
+    /**
+     * Sections de fin d'article : ce ne sont que des listes de renvois
+     * (références, liens, bibliographie) — inutiles à lire ou à afficher.
+     */
+    private val SKIPPED_SECTIONS = setOf(
+        "notes et références", "notes et references", "références", "references", "notes",
+        "voir aussi", "annexes", "annexe", "bibliographie", "liens externes",
+        "articles connexes", "sources", "galerie", "galerie d'images", "filmographie",
+        "references and notes", "see also", "external links", "further reading",
+        "bibliography", "gallery", "citations", "footnotes"
+    )
+
+    /**
+     * Met le texte brut de l'API (`explaintext`) en forme pour l'audioguide et
+     * l'affichage. Les titres arrivent sous la forme `== Histoire ==` : lus tels
+     * quels, le TTS prononçait « égale égale égale ». On les transforme en
+     * phrases (« Histoire. ») et on coupe les sections de renvois finales.
+     */
+    internal fun cleanArticleText(raw: String): String {
+        val out = StringBuilder()
+        var skipping = false
+        raw.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            val heading = trimmed
+                .takeIf { it.startsWith("=") && it.endsWith("=") && it.length > 2 }
+                ?.trim('=')
+                ?.trim()
+            if (heading != null) {
+                // Une section ignorée l'est jusqu'au titre suivant
+                skipping = heading.lowercase() in SKIPPED_SECTIONS
+                if (!skipping && heading.isNotBlank()) {
+                    // Titre lu comme une phrase : le point force une pause TTS
+                    out.append("\n\n")
+                    out.append(if (heading.endsWith(".")) heading else "$heading.")
+                    out.append("\n")
+                }
+                return@forEach
+            }
+            if (skipping || trimmed.isBlank()) return@forEach
+            out.append(trimmed).append("\n")
+        }
+        return out.toString()
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
     }
 
     /**

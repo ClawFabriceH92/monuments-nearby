@@ -84,6 +84,7 @@ import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.location.GuidedVisitBus
+import com.fabrice.monumentsnearby.location.NearbyAlert
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import com.fabrice.monumentsnearby.ui.theme.CategoryColors
 import com.fabrice.monumentsnearby.update.AutoUpdater
@@ -123,6 +124,8 @@ fun MonumentsScreen(
     var showMuseumSearch by remember { mutableStateOf(true) }
     var showCamera by remember { mutableStateOf(false) }
     var cameraState by remember { mutableStateOf<UiState.Success?>(null) }
+    // Monument dont on vient d'entrer dans le rayon de 100 m (pop-up)
+    var nearbyAlert by remember { mutableStateOf<NearbyAlert?>(null) }
 
     var lastTitle by remember { mutableStateOf("Monuments à proximité") }
     val success = state as? UiState.Success
@@ -154,23 +157,32 @@ fun MonumentsScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
+    DisposableEffect(guidedVisit) {
         speaker.onFinished = {
             paused.value = false
             speakerActive.value = false
         }
-        // Visite guidée : le receiver de geofence invoque ce listener quand on
-        // entre dans le rayon d'un monument (si l'option est activée).
-        GuidedVisitBus.listener = { name, description ->
-            speakerActive.value = true
-            speaker.speak(
-                "Tu approches de $name. " + (description ?: "Regarde autour de toi !")
-            )
+        // Proximité : le receiver de geofence invoque ce listener à l'entrée
+        // dans le rayon de 100 m d'un monument. Pop-up systématique quand
+        // l'app est ouverte ; lecture audio seulement si la visite guidée
+        // est activée dans les réglages.
+        GuidedVisitBus.listener = { alert ->
+            nearbyAlert = alert
+            if (guidedVisit) {
+                speakerActive.value = true
+                speaker.speak(
+                    "Tu approches de ${alert.name}. " +
+                        (alert.description ?: "Regarde autour de toi !")
+                )
+            }
         }
-        onDispose {
-            GuidedVisitBus.listener = null
-            speaker.shutdown()
-        }
+        onDispose { GuidedVisitBus.listener = null }
+    }
+    // Le moteur TTS ne se libère qu'à la sortie de l'écran (pas à chaque
+    // changement de réglage, sinon la lecture en cours serait coupée).
+    DisposableEffect(Unit) {
+        onDispose { speaker.shutdown() }
     }
 
     // Lecture d'un texte arbitraire (article complet, visite guidée…)
@@ -424,6 +436,74 @@ fun MonumentsScreen(
             onDismiss = { showSettingsDialog = false }
         )
     }
+
+    // Pop-up de proximité : « tu es à moins de 100 m de … »
+    nearbyAlert?.let { alert ->
+        val known = viewModel.findMonument(alert.id)
+        NearbyDialog(
+            alert = alert,
+            onOpenSheet = if (known != null) {
+                {
+                    selectedMonument = known
+                    nearbyAlert = null
+                }
+            } else null,
+            onListen = {
+                speakerActive.value = true
+                speaker.speak(
+                    "${alert.name}. " + (alert.description ?: "Regarde autour de toi !")
+                )
+                nearbyAlert = null
+            },
+            onDismiss = { nearbyAlert = null }
+        )
+    }
+}
+
+/**
+ * Pop-up affiché quand on entre dans le rayon de 100 m d'un monument
+ * (app ouverte, alerte de proximité 🔔 activée).
+ */
+@Composable
+private fun NearbyDialog(
+    alert: NearbyAlert,
+    onOpenSheet: (() -> Unit)?,
+    onListen: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("🏛 À moins de 100 m") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(alert.name, style = MaterialTheme.typography.titleMedium)
+                alert.description?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (onOpenSheet != null) {
+                TextButton(onClick = onOpenSheet) { Text("Voir la fiche") }
+            } else {
+                TextButton(onClick = onListen) { Text("🔊 Écouter") }
+            }
+        },
+        dismissButton = {
+            Row {
+                if (onOpenSheet != null) {
+                    TextButton(onClick = onListen) { Text("🔊 Écouter") }
+                }
+                TextButton(onClick = onDismiss) { Text("Plus tard") }
+            }
+        }
+    )
 }
 
 /**
@@ -1213,6 +1293,8 @@ private fun MonumentDetailScreen(
     var showNoteDialog by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
     var loadingArticle by remember { mutableStateOf(false) }
+    // Article Wikipédia chargé : affiché en plein écran, lisible à voix haute
+    var articleText by remember(monument.id) { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -1422,7 +1504,7 @@ private fun MonumentDetailScreen(
                 Button(onClick = { openMaps(context, monument) }) { Text("Itinéraire") }
             }
 
-            // Audioguide long format : article Wikipédia complet
+            // Article Wikipédia complet : affiché à l'écran ET lisible à voix haute
             if (!monument.wikipediaTitle.isNullOrBlank()) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
@@ -1431,11 +1513,9 @@ private fun MonumentDetailScreen(
                         if (title != null) {
                             loadingArticle = true
                             scope.launch {
-                                val text = WikipediaClient.fetchFullText(title)
+                                articleText = WikipediaClient.fetchFullText(title)
+                                    ?: "L'article complet n'est pas disponible pour le moment."
                                 loadingArticle = false
-                                onListenText(
-                                    text ?: "L'article complet n'est pas disponible pour le moment."
-                                )
                             }
                         }
                     },
@@ -1444,7 +1524,7 @@ private fun MonumentDetailScreen(
                 ) {
                     Text(
                         if (loadingArticle) "Chargement de l'article…"
-                        else "📖 Écouter l'article complet"
+                        else "📖 Lire l'article complet"
                     )
                 }
             }
@@ -1488,6 +1568,73 @@ private fun MonumentDetailScreen(
             qid = monument.wikidataId,
             onDismiss = { showQrDialog = false }
         )
+    }
+
+    articleText?.let { text ->
+        ArticleScreen(
+            monumentName = monument.name,
+            text = text,
+            onListen = { onListenText(text) },
+            onClose = { articleText = null }
+        )
+    }
+}
+
+/**
+ * Article Wikipédia en plein écran : on peut le lire à l'œil, et lancer
+ * l'audioguide dessus (la barre de lecture de la fiche reste disponible).
+ */
+@Composable
+private fun ArticleScreen(
+    monumentName: String,
+    text: String,
+    onListen: () -> Unit,
+    onClose: () -> Unit
+) {
+    BackHandler(enabled = true) { onClose() }
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onClose) { Text("← Retour", color = Color.White) }
+                    Text(
+                        monumentName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onListen) { Text("🔊 Écouter", color = Color.White) }
+                }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 14.dp)
+                )
+                Text(
+                    "Source : Wikipédia (CC BY-SA)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            }
+        }
     }
 }
 
@@ -1696,7 +1843,9 @@ private fun SettingsDialog(
                     Column(Modifier.weight(1f)) {
                         Text("Visite guidée", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "Lecture audio automatique à l'approche d'un monument (alerte 🔔 activée, app ouverte).",
+                            "Lecture audio automatique quand tu arrives à moins de 100 m " +
+                                "d'un monument. Le pop-up de proximité, lui, s'affiche dès " +
+                                "que l'alerte 🔔 est activée et l'app ouverte.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
