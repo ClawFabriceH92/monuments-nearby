@@ -150,7 +150,17 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
     }
 
     private fun splitPhrases(text: String): List<String> =
-        text.split(Regex("(?<=[.!?…])\\s+")).filter { it.isNotBlank() }
+        speakable(text).split(Regex("(?<=[.!?…])\\s+")).filter { it.isNotBlank() }
+
+    /**
+     * Retire ce qui se prononce mal : les `=` des titres de section wikitext
+     * (lus « égale égale égale »), les puces et les séparateurs.
+     */
+    private fun speakable(text: String): String = text
+        .replace(Regex("(?m)^\\s*=+\\s*(.*?)\\s*=+\\s*$"), "$1.")
+        .replace(Regex("[=_*~`|]+"), " ")
+        .replace(Regex("(?m)^\\s*[-•·–]\\s+"), "")
+        .replace(Regex("[ \\t]{2,}"), " ")
 
     private fun playNext() {
         if (paused) return

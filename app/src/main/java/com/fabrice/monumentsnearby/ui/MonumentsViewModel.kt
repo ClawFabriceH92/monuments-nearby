@@ -190,6 +190,16 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     private val _lastMonuments = MutableStateFlow<UiState.Success?>(null)
     val lastMonuments: StateFlow<UiState.Success?> = _lastMonuments
 
+    /**
+     * Retrouve un monument par son id dans les résultats connus — sert au
+     * pop-up de proximité, qui ne reçoit du geofence que l'identifiant.
+     */
+    fun findMonument(id: String): Monument? {
+        val fromState = (_state.value as? UiState.Success)?.monuments
+            ?.firstOrNull { it.id == id }
+        return fromState ?: _lastMonuments.value?.monuments?.firstOrNull { it.id == id }
+    }
+
     /** Monuments autour de la position GPS (mode MONUMENTS). */
     fun load(lat: Double, lon: Double) {
         _state.value = UiState.Loading
