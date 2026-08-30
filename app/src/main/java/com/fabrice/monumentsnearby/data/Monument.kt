@@ -1,5 +1,15 @@
 package com.fabrice.monumentsnearby.data
 
+import java.util.Locale
+
+/**
+ * Majuscule initiale pour l'affichage : les libellés Wikidata suivent la
+ * convention des dictionnaires (« musée Louis-Vuitton », « château
+ * d'Asnières ») — en titre de carte ou de fiche, on capitalise.
+ */
+fun String.toDisplayName(): String =
+    replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.FRENCH) else it.toString() }
+
 /**
  * Un monument historique / lieu d'intérêt.
  * Les champs wikidataId / wikipediaTitle / inception / imageUrl sont

@@ -320,7 +320,7 @@ object WikidataClient {
         }
 
         return m.copy(
-            name = label ?: m.name,
+            name = (label ?: m.name).toDisplayName(),
             kind = typeLabel ?: m.kind,
             description = desc ?: m.description,
             imageUrl = imageUrl ?: m.imageUrl,
@@ -462,7 +462,8 @@ object WikidataClient {
                 ids.add(id)
                 pending += Museum(
                     qid = id,
-                    name = r.optString("label").takeIf { it.isNotBlank() } ?: id,
+                    name = (r.optString("label").takeIf { it.isNotBlank() } ?: id)
+                        .toDisplayName(),
                     description = r.optString("description").takeIf { it.isNotBlank() }
                 )
             }
@@ -530,7 +531,7 @@ object WikidataClient {
                     ?.takeIf { it.isNotBlank() } ?: continue
                 val candidate = Monument(
                     id = workId,
-                    name = name,
+                    name = name.toDisplayName(),
                     lat = 0.0,
                     lon = 0.0,
                     distanceM = 0.0,
