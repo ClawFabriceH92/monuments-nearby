@@ -15,8 +15,8 @@ android {
         applicationId = "com.fabrice.monumentsnearby"
         minSdk = 29
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.11.0"
+        versionCode = 18
+        versionName = "0.11.1"
     }
 
     signingConfigs {

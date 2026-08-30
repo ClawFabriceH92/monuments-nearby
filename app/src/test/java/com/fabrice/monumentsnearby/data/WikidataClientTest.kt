@@ -7,6 +7,14 @@ import org.junit.Test
 class WikidataClientTest {
 
     @Test
+    fun `nom capitalise pour l affichage`() {
+        assertEquals("Musée Louis-Vuitton", "musée Louis-Vuitton".toDisplayName())
+        assertEquals("Château d'Asnières", "château d'Asnières".toDisplayName())
+        assertEquals("Église Sainte-Geneviève", "église Sainte-Geneviève".toDisplayName())
+        assertEquals("La Joconde", "La Joconde".toDisplayName())
+    }
+
+    @Test
     fun `annee simple`() {
         assertEquals("1889", WikidataClient.yearOf("+1889-03-31T00:00:00Z"))
     }

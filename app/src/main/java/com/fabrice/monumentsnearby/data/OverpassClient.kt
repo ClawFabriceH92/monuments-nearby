@@ -126,7 +126,7 @@ object OverpassClient {
             val wikipedia = tags.optString("wikipedia").takeIf { it.isNotBlank() }
             result += Monument(
                 id = el.optString("type") + "/" + el.optLong("id"),
-                name = name,
+                name = name.toDisplayName(),
                 lat = mLat,
                 lon = mLon,
                 distanceM = haversine(lat, lon, mLat, mLon),
