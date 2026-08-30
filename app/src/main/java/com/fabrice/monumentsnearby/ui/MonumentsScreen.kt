@@ -734,6 +734,7 @@ private fun AroundContent(
     onLocate: () -> Unit,
     onOpenCamera: () -> Unit
 ) {
+    val context = LocalContext.current
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
@@ -918,6 +919,11 @@ private fun AroundContent(
                 } else {
                     onMessage("Autorise la localisation précise pour la balade guidée")
                 }
+            },
+            onOpenCircuit = { stops ->
+                if (!openWalkCircuit(context, effective.lat, effective.lon, stops)) {
+                    onMessage("Aucune application de cartes installée")
+                }
             }
         )
     }
@@ -932,7 +938,8 @@ private fun WalkDialog(
     onDismiss: () -> Unit,
     onNavigate: (Monument) -> Unit,
     onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit,
-    onStartGuided: (List<MonumentsViewModel.WalkStop>) -> Unit
+    onStartGuided: (List<MonumentsViewModel.WalkStop>) -> Unit,
+    onOpenCircuit: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     val context = LocalContext.current
     AlertDialog(
@@ -971,6 +978,10 @@ private fun WalkDialog(
                 }
                 if (stops.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
+                    // Itinéraire piéton complet (toutes les étapes) dans Google Maps
+                    TextButton(onClick = { onOpenCircuit(stops) }) {
+                        Text("🧭 Circuit dans Google Maps")
+                    }
                     TextButton(onClick = { exportWalkGpx(context, stops) }) {
                         Text("💾 Exporter la balade (GPX)")
                     }
@@ -2591,6 +2602,37 @@ private fun guideText(m: Monument): String {
     val desc = m.description?.takeIf { it.isNotBlank() } ?: "Aucune description disponible."
     val artist = m.artist?.let { " Par $it." } ?: ""
     return "${m.name}. ${m.kind.replace('_', ' ')}.$artist $desc"
+}
+
+/**
+ * Ouvre le circuit complet de la balade dans Google Maps (itinéraire piéton
+ * multi-étapes : position de départ → étapes → dernière étape). L'URL Maps
+ * accepte jusqu'à 9 waypoints — nos balades font 8 étapes au plus.
+ */
+private fun openWalkCircuit(
+    context: Context,
+    startLat: Double,
+    startLon: Double,
+    stops: List<MonumentsViewModel.WalkStop>
+): Boolean {
+    if (stops.isEmpty()) return false
+    fun pt(lat: Double, lon: Double) = "$lat,$lon"
+    val destination = stops.last().monument
+    val waypoints = stops.dropLast(1)
+        .joinToString("|") { pt(it.monument.lat, it.monument.lon) }
+    val url = buildString {
+        append("https://www.google.com/maps/dir/?api=1")
+        append("&origin=").append(pt(startLat, startLon))
+        append("&destination=").append(pt(destination.lat, destination.lon))
+        if (waypoints.isNotEmpty()) append("&waypoints=").append(Uri.encode(waypoints))
+        append("&travelmode=walking")
+    }
+    return try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        true
+    } catch (e: Exception) {
+        false
+    }
 }
 
 /** Ouvre l'itinéraire. Retourne false si aucune app de cartes n'est installée. */
