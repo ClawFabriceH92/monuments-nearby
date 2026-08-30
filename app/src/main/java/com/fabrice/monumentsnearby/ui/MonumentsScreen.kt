@@ -2093,33 +2093,6 @@ private fun SettingsDialog(
     val context = LocalContext.current
     val voices = speaker.voices
     val radius by viewModel.searchRadiusM.collectAsStateWithLifecycle()
-    // Balade guidée : barre d'étape + lecture audio automatique à l'arrivée
-    val guidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
-    val walkArrival by viewModel.walkArrival.collectAsStateWithLifecycle()
-    LaunchedEffect(walkArrival) {
-        val arrival = walkArrival ?: return@LaunchedEffect
-        speakerActive.value = true
-        speakingTitle.value = arrival.monument.name
-        val next = viewModel.guidedWalk.value?.let { w -> w.stops.getOrNull(w.nextIndex) }
-        speaker.speak(
-            buildString {
-                append("Étape ${arrival.stepIndex + 1} sur ${arrival.totalSteps} : ")
-                append("${arrival.monument.name}. ")
-                append(arrival.monument.description ?: "Regarde autour de toi !")
-                when {
-                    arrival.lastStep ->
-                        append(" C'était la dernière étape. Belle balade !")
-                    next != null ->
-                        append(
-                            " Prochaine étape : ${next.monument.name}, " +
-                                "à ${spokenDistance(next.stepM)}."
-                        )
-                }
-            }
-        )
-        viewModel.consumeWalkArrival()
-    }
-
     val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
     val dailyDiscovery by viewModel.dailyDiscovery.collectAsStateWithLifecycle()
     var autoUpdate by remember { mutableStateOf(UpdateManager.autoUpdateEnabled(context)) }
