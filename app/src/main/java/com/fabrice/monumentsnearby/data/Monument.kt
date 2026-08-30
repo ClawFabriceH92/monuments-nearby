@@ -41,6 +41,22 @@ data class Monument(
     val openingHours: String? = null,
     /** Tarif (OSM fee/charge) : « payant », « gratuit », ou prix. */
     val fee: String? = null,
+    /** Année du classement patrimonial (qualificatif P580 de P1435). */
+    val heritageYear: String? = null,
+    /** Référence Mérimée (P380) → notice POP data.culture.gouv.fr. */
+    val merimeeRef: String? = null,
+    /** Identifiant Muséofile (P539) → notice POP des musées de France. */
+    val museofileRef: String? = null,
+    /** Nommé d'après (P138). */
+    val namedAfter: String? = null,
+    /** Événements marquants (P793) : « incendie (2019) », « restauration »… */
+    val events: List<String> = emptyList(),
+    /** Année d'ouverture officielle (P1619), si différente de la construction. */
+    val openedYear: String? = null,
+    /** Adresse postale (P6375). */
+    val address: String? = null,
+    /** Commune / division administrative (P131). */
+    val commune: String? = null,
     /** true si monument majeur (article Wikipédia dédié ou type important). */
     val important: Boolean = false
 )
