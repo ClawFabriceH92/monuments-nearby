@@ -82,8 +82,11 @@ object WikidataClient {
     private suspend fun fetchEntities(ids: List<String>): Map<String, JSONObject> {
         val result = mutableMapOf<String, JSONObject>()
         for (chunk in ids.chunked(MAX_IDS)) {
+            // languagefallback : hors de France, beaucoup d'entités n'ont pas de
+            // label FR — on demande FR puis EN plutôt que d'afficher le QID brut.
             val url = "$BASE?action=wbgetentities&ids=${chunk.joinToString("|")}" +
-                    "&props=labels|descriptions|claims|sitelinks&languages=fr&format=json"
+                    "&props=labels|descriptions|claims|sitelinks" +
+                    "&languages=fr|en&languagefallback=1&format=json"
             val root = getJson(url)
             val entities = root.optJSONObject("entities") ?: continue
             val keys = entities.keys()
@@ -98,8 +101,12 @@ object WikidataClient {
     private suspend fun fetchTypeLabels(entities: Map<String, JSONObject>): Map<String, String> {
         val typeIds = LinkedHashSet<String>()
         // P31 = type, P84 = architecte, P149 = style, P186 = matériau,
-        // P1435 = classement, P112 = fondateur, P127 = propriétaire
-        val props = listOf("P31", "P84", "P149", "P186", "P1435", "P112", "P127")
+        // P1435 = classement, P112 = fondateur, P127 = propriétaire,
+        // P138 = nommé d'après, P793 = événements marquants, P131 = commune
+        val props = listOf(
+            "P31", "P84", "P149", "P186", "P1435", "P112", "P127",
+            "P138", "P793", "P131"
+        )
         for (entity in entities.values) {
             for (prop in props) {
                 val arr = entity.optJSONObject("claims")?.optJSONArray(prop) ?: continue
@@ -117,14 +124,16 @@ object WikidataClient {
         val result = mutableMapOf<String, String>()
         for (chunk in typeIds.chunked(MAX_IDS)) {
             val url = "$BASE?action=wbgetentities&ids=${chunk.joinToString("|")}" +
-                    "&props=labels&languages=fr&format=json"
+                    "&props=labels&languages=fr|en&languagefallback=1&format=json"
             val root = getJson(url)
             val entities = root.optJSONObject("entities") ?: continue
             val keys = entities.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
-                val label = entities.getJSONObject(key).optJSONObject("labels")
-                    ?.optJSONObject("fr")?.optString("value")
+                val labels = entities.getJSONObject(key).optJSONObject("labels")
+                val label = labels?.optJSONObject("fr")?.optString("value")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: labels?.optJSONObject("en")?.optString("value")
                 if (!label.isNullOrBlank()) result[key] = label
             }
         }
@@ -137,7 +146,11 @@ object WikidataClient {
         val claims = entity.optJSONObject("claims")
 
         val label = labels?.optJSONObject("fr")?.optString("value")
+            ?.takeIf { it.isNotBlank() }
+            ?: labels?.optJSONObject("en")?.optString("value")
         val desc = descriptions?.optJSONObject("fr")?.optString("value")
+            ?.takeIf { it.isNotBlank() }
+            ?: descriptions?.optJSONObject("en")?.optString("value")
 
         // Fallback : titre Wikipédia depuis les sitelinks Wikidata (FR puis EN —
         // hors de France beaucoup de monuments n'ont qu'un article anglais)
@@ -222,6 +235,50 @@ object WikidataClient {
         val heritage = firstItemLabel(claims, "P1435", typeLabels)
         val founder = firstItemLabel(claims, "P112", typeLabels)
         val owner = firstItemLabel(claims, "P127", typeLabels)
+        val namedAfter = firstItemLabel(claims, "P138", typeLabels)
+        val commune = firstItemLabel(claims, "P131", typeLabels)
+
+        // Année du classement : qualificatif P580 (date de début) du premier P1435
+        val heritageYear = claims?.optJSONArray("P1435")
+            ?.optJSONObject(0)?.optJSONObject("qualifiers")
+            ?.optJSONArray("P580")?.optJSONObject(0)
+            ?.optJSONObject("datavalue")?.optJSONObject("value")
+            ?.optString("time")?.let(::yearOf)
+
+        // Identifiants pivots vers les bases patrimoniales officielles :
+        // P380 = référence Mérimée, P539 = identifiant Muséofile (notices POP)
+        val merimeeRef = firstStringValue(claims, "P380")
+        val museofileRef = firstStringValue(claims, "P539")
+
+        // Année d'ouverture officielle (P1619) — inaugurations, musées
+        val openedYear = claims?.optJSONArray("P1619")
+            ?.optJSONObject(0)?.optJSONObject("mainsnak")
+            ?.optJSONObject("datavalue")?.optJSONObject("value")
+            ?.optString("time")?.let(::yearOf)
+
+        // Adresse postale (P6375, texte monolingue)
+        val address = claims?.optJSONArray("P6375")
+            ?.optJSONObject(0)?.optJSONObject("mainsnak")
+            ?.optJSONObject("datavalue")?.optJSONObject("value")
+            ?.optString("text")?.takeIf { it.isNotBlank() }
+
+        // Événements marquants (P793) : label + année (qualificatif P585)
+        val events = mutableListOf<String>()
+        claims?.optJSONArray("P793")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val claim = arr.optJSONObject(i) ?: continue
+                val value = claim.optJSONObject("mainsnak")
+                    ?.optJSONObject("datavalue")?.optJSONObject("value")
+                if (value?.optString("entity-type") != "item") continue
+                val eventLabel = typeLabels[value.optString("id")] ?: continue
+                val year = claim.optJSONObject("qualifiers")
+                    ?.optJSONArray("P585")?.optJSONObject(0)
+                    ?.optJSONObject("datavalue")?.optJSONObject("value")
+                    ?.optString("time")?.let(::yearOf)
+                events.add(if (year != null) "$eventLabel ($year)" else eventLabel)
+                if (events.size >= 4) break // au-delà, la fiche devient un inventaire
+            }
+        }
 
         // Site web officiel (P856) — valeur string (URL)
         var website: String? = null
@@ -251,9 +308,32 @@ object WikidataClient {
             founder = founder,
             owner = owner,
             website = website,
+            heritageYear = heritageYear,
+            merimeeRef = merimeeRef,
+            museofileRef = museofileRef,
+            namedAfter = namedAfter,
+            events = events,
+            openedYear = openedYear,
+            address = address,
+            commune = commune,
             wikipediaTitle = wikiTitle ?: m.wikipediaTitle
         )
     }
+
+    /** Première valeur chaîne d'une propriété (P380, P539…). */
+    private fun firstStringValue(claims: JSONObject?, prop: String): String? {
+        val arr = claims?.optJSONArray(prop) ?: return null
+        for (i in 0 until arr.length()) {
+            val value = arr.optJSONObject(i)?.optJSONObject("mainsnak")
+                ?.optJSONObject("datavalue")?.optString("value")
+            if (!value.isNullOrBlank()) return value
+        }
+        return null
+    }
+
+    /** "+1889-03-31T00:00:00Z" → "1889". Null si année absente (dates av. J.-C.). */
+    private fun yearOf(time: String): String? =
+        time.trimStart('+').takeWhile { it != '-' }.takeIf { it.isNotBlank() }
 
     /** Premier label FR d'une propriété de type « item » (P84, P149…). */
     private fun firstItemLabel(

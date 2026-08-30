@@ -2,7 +2,9 @@ package com.fabrice.monumentsnearby.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -13,6 +15,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -47,11 +51,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.fabrice.monumentsnearby.data.Monument
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -75,6 +81,14 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
     var qrMode by remember { mutableStateOf(false) }
+    var capturing by remember { mutableStateOf(false) }
+    var captureError by remember { mutableStateOf<String?>(null) }
+    // Use case de capture photo, partagé avec CameraPreview (bindé avec Preview)
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+    }
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -191,7 +205,41 @@ fun CameraScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            CameraPreview(qrMode = qrMode, onQrFound = onQrFound, context = context)
+            CameraPreview(
+                qrMode = qrMode,
+                onQrFound = onQrFound,
+                context = context,
+                imageCapture = imageCapture
+            )
+
+            // Prise de photo → identification de l'œuvre/du monument via
+            // Google Lens (ou toute app d'images) — partage de la capture.
+            Button(
+                onClick = {
+                    capturing = true
+                    captureError = null
+                    capturePhotoAndIdentify(context, imageCapture) { error ->
+                        capturing = false
+                        captureError = error
+                    }
+                },
+                enabled = !capturing,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+            ) { Text(if (capturing) "…" else "📸 Identifier") }
+            captureError?.let { msg ->
+                Text(
+                    msg,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 64.dp)
+                        .background(Color(0xAA000000), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
 
             if (qrMode) {
                 // Viseur QR
@@ -264,7 +312,8 @@ fun CameraScreen(
 private fun CameraPreview(
     qrMode: Boolean,
     onQrFound: (String) -> Unit,
-    context: Context
+    context: Context,
+    imageCapture: ImageCapture
 ) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient() }
@@ -316,9 +365,11 @@ private fun CameraPreview(
                             imageProxy.close()
                         }
                     }
-                    provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+                    provider.bindToLifecycle(
+                        lifecycleOwner, selector, preview, analysis, imageCapture
+                    )
                 } else {
-                    provider.bindToLifecycle(lifecycleOwner, selector, preview)
+                    provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
                 }
             } catch (e: Exception) {
                 Log.e("CameraScreen", "Erreur caméra", e)
@@ -345,6 +396,66 @@ private fun CameraPreview(
         modifier = Modifier.fillMaxSize()
     )
 }
+
+/**
+ * Capture une photo puis l'envoie à Google Lens pour identifier l'œuvre ou le
+ * monument. Il n'existe pas d'API publique de recherche d'image inversée : on
+ * partage la photo (ACTION_SEND) à l'app Google — qui l'ouvre dans Lens — avec
+ * repli sur le sélecteur d'apps si elle est absente. [onDone] reçoit un message
+ * d'erreur, ou null si le partage est parti.
+ */
+private fun capturePhotoAndIdentify(
+    context: Context,
+    imageCapture: ImageCapture,
+    onDone: (String?) -> Unit
+) {
+    val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+    val photo = File(dir, "identification.jpg")
+    val options = ImageCapture.OutputFileOptions.Builder(photo).build()
+    imageCapture.takePicture(
+        options,
+        ContextCompat.getMainExecutor(context),
+        object : ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                val uri = try {
+                    FileProvider.getUriForFile(
+                        context, "${context.packageName}.fileprovider", photo
+                    )
+                } catch (e: Exception) {
+                    onDone("Photo enregistrée mais partage impossible.")
+                    return
+                }
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                // 1 tap : l'app Google ouvre directement Lens sur l'image ;
+                // sinon, sélecteur générique (déclarée dans <queries> du manifest)
+                val lens = Intent(send).setPackage(GOOGLE_APP_PACKAGE)
+                val intent = if (lens.resolveActivity(context.packageManager) != null) {
+                    lens
+                } else {
+                    Intent.createChooser(send, "Identifier l'image avec…")
+                }
+                try {
+                    context.startActivity(intent)
+                    onDone(null)
+                } catch (e: Exception) {
+                    onDone("Aucune application ne peut analyser la photo.")
+                }
+            }
+
+            override fun onError(exception: ImageCaptureException) {
+                Log.e("CameraScreen", "Capture échouée", exception)
+                onDone("La capture a échoué, réessaie.")
+            }
+        }
+    )
+}
+
+/** App Google (hôte de Google Lens) — cible du partage « Identifier ». */
+private const val GOOGLE_APP_PACKAGE = "com.google.android.googlequicksearchbox"
 
 /** Monument visé : celui dont l'angle de visée est le plus proche du cap. */
 private fun findTarget(

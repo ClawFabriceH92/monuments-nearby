@@ -9,6 +9,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Visibilité de paquets (API 30+) : nécessaire pour détecter l'app
+         Google (Lens) et les apps capables de recevoir une image partagée -->
+    <queries>
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="image/jpeg" />
+        </intent>
+    </queries>
+
     <!-- GPS recommandé mais pas obligatoire (compat tablettes sans GPS) -->
     <uses-feature
         android:name="android.hardware.location.gps"
