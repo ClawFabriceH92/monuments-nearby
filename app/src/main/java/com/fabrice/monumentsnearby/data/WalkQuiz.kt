@@ -63,7 +63,7 @@ object WalkQuiz {
                 if (distractors.size < 2) return@mapNotNull null
                 val options = (distractors + candidate.answer).shuffled(random)
                 Question(
-                    text = candidate.text,
+                    text = candidate.clue,
                     options = options,
                     correctIndex = options.indexOf(candidate.answer)
                 )
