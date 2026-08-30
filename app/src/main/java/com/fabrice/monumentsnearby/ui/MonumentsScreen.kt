@@ -88,6 +88,7 @@ import com.fabrice.monumentsnearby.BuildConfig
 import com.fabrice.monumentsnearby.data.FavoriteEntry
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.VisitRepository
+import com.fabrice.monumentsnearby.data.WalkQuiz
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.data.category
@@ -125,6 +126,7 @@ fun MonumentsScreen(
     // rememberSaveable : survivre à la rotation et au retour depuis Maps
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.AROUND) }
     var showMap by rememberSaveable { mutableStateOf(false) }
+    var showWalk by rememberSaveable { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var selectedMonument by remember { mutableStateOf<Monument?>(null) }
     val paused = remember { mutableStateOf(false) }
@@ -191,6 +193,7 @@ fun MonumentsScreen(
     // Balade guidée : barre d'étape + lecture audio automatique à l'arrivée
     val guidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
     val walkArrival by viewModel.walkArrival.collectAsStateWithLifecycle()
+    val walkQuizQuestions by viewModel.walkQuiz.collectAsStateWithLifecycle()
     LaunchedEffect(walkArrival) {
         val arrival = walkArrival ?: return@LaunchedEffect
         speakerActive.value = true
@@ -202,8 +205,12 @@ fun MonumentsScreen(
                 append("${arrival.monument.name}. ")
                 append(arrival.monument.description ?: "Regarde autour de toi !")
                 when {
-                    arrival.lastStep ->
+                    arrival.lastStep -> {
                         append(" C'était la dernière étape. Belle balade !")
+                        if (viewModel.walkQuiz.value != null) {
+                            append(" Un petit quiz t'attend à l'écran.")
+                        }
+                    }
                     next != null ->
                         append(
                             " Prochaine étape : ${next.monument.name}, " +
@@ -368,6 +375,11 @@ fun MonumentsScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        // Tap : revenir à la carte et à l'itinéraire
+                                        .clickable {
+                                            selectedTab = AppTab.AROUND
+                                            showMap = true
+                                        }
                                         .padding(horizontal = 16.dp, vertical = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -437,7 +449,15 @@ fun MonumentsScreen(
                 }
             },
             floatingActionButton = {
-                if (selectedTab == AppTab.AROUND && showMap && mapDisplayable && !isMuseumMode) {
+                if (selectedTab == AppTab.AROUND && !showMap && mapDisplayable && !isMuseumMode) {
+                    // Le point d'entrée des balades était enfoui dans la
+                    // barre d'outils : bouton flottant bien visible
+                    ExtendedFloatingActionButton(
+                        text = { Text("🥾 Balades") },
+                        icon = {},
+                        onClick = { showWalk = true }
+                    )
+                } else if (selectedTab == AppTab.AROUND && showMap && mapDisplayable && !isMuseumMode) {
                     ExtendedFloatingActionButton(
                         text = { Text("🏛 Musées ici") },
                         icon = {},
@@ -466,6 +486,8 @@ fun MonumentsScreen(
                         onNavigate = navigateTo,
                         onMessage = notify,
                         showMap = showMap,
+                        showWalk = showWalk,
+                        onShowWalkChange = { showWalk = it },
                         onToggleMap = { showMap = !showMap },
                         onOpenMap = { showMap = true },
                         onSelectMonument = { selectedMonument = it },
@@ -521,6 +543,14 @@ fun MonumentsScreen(
             speaker = speaker,
             viewModel = viewModel,
             onDismiss = { showSettingsDialog = false }
+        )
+    }
+
+    // Quiz de fin de balade guidée
+    walkQuizQuestions?.let { questions ->
+        WalkQuizDialog(
+            questions = questions,
+            onDismiss = { viewModel.consumeWalkQuiz() }
         )
     }
 
@@ -659,6 +689,96 @@ private fun FilterBar(selected: String?, onSelect: (String?) -> Unit) {
 }
 
 /**
+ * Quiz de fin de balade : une question à la fois, options révélées après la
+ * réponse, score final. Questions générées depuis les données des étapes.
+ */
+@Composable
+private fun WalkQuizDialog(
+    questions: List<WalkQuiz.Question>,
+    onDismiss: () -> Unit
+) {
+    var index by remember { mutableStateOf(0) }
+    var score by remember { mutableStateOf(0) }
+    var answered by remember { mutableStateOf<Int?>(null) }
+    val finished = index >= questions.size
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (finished) "🎓 Résultat" else "🎓 Quiz de la balade") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (finished) {
+                    val n = questions.size
+                    Text(
+                        when {
+                            score == n -> "Sans faute : $score/$n ! Guide confirmé 🏆"
+                            score * 2 >= n -> "Bien joué : $score/$n — la balade a laissé des traces !"
+                            else -> "$score/$n… une bonne raison de refaire la balade 😉"
+                        },
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                } else {
+                    val q = questions[index]
+                    Text(
+                        "Question ${index + 1}/${questions.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(q.text, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(10.dp))
+                    q.options.forEachIndexed { i, option ->
+                        val revealed = answered != null
+                        val isCorrect = i == q.correctIndex
+                        OutlinedButton(
+                            onClick = {
+                                if (answered == null) {
+                                    answered = i
+                                    if (isCorrect) score++
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Text(
+                                buildString {
+                                    if (revealed && isCorrect) append("✅ ")
+                                    if (revealed && !isCorrect && answered == i) append("❌ ")
+                                    append(option)
+                                },
+                                color = when {
+                                    revealed && isCorrect -> MaterialTheme.colorScheme.primary
+                                    revealed && answered == i -> MaterialTheme.colorScheme.error
+                                    else -> Color.Unspecified
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                finished -> TextButton(onClick = onDismiss) { Text("Terminer") }
+                answered != null -> TextButton(
+                    onClick = {
+                        index++
+                        answered = null
+                    }
+                ) {
+                    Text(if (index == questions.lastIndex) "Voir le score" else "Question suivante")
+                }
+            }
+        },
+        dismissButton = {
+            if (!finished) {
+                TextButton(onClick = onDismiss) { Text("Plus tard") }
+            }
+        }
+    )
+}
+
+/**
  * En-tête « X monuments trouvés » + boutons (tri, caméra, balade, liste/carte),
  * affiché au-dessus de la liste comme de la carte. Sur deux lignes pour que
  * tout reste visible sur les écrans étroits (les boutons défilent au besoin).
@@ -728,6 +848,8 @@ private fun AroundContent(
     onNavigate: (Monument) -> Unit,
     onMessage: (String) -> Unit,
     showMap: Boolean,
+    showWalk: Boolean,
+    onShowWalkChange: (Boolean) -> Unit,
     onToggleMap: () -> Unit,
     onOpenMap: () -> Unit,
     onSelectMonument: (Monument) -> Unit,
@@ -737,6 +859,9 @@ private fun AroundContent(
     val context = LocalContext.current
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    // Balade guidée active : son itinéraire s'affiche sur la carte même si
+    // l'état local walkStops a été perdu (rotation, changement d'onglet)
+    val activeGuidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
     // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
     val effective = when (state) {
         is UiState.Success ->
@@ -745,7 +870,6 @@ private fun AroundContent(
     }
     var filter by rememberSaveable { mutableStateOf<String?>(null) }
     var sortByYear by rememberSaveable { mutableStateOf(false) }
-    var showWalk by remember { mutableStateOf(false) }
     // Balade affichée sur la carte (null = pas de tracé)
     var walkStops by remember { mutableStateOf<List<MonumentsViewModel.WalkStop>?>(null) }
 
@@ -775,7 +899,7 @@ private fun AroundContent(
                                 sortByYear = sortByYear,
                                 onToggleSort = { sortByYear = !sortByYear },
                                 onOpenCamera = onOpenCamera,
-                                onShowWalk = { showWalk = true },
+                                onShowWalk = { onShowWalkChange(true) },
                                 showMap = true,
                                 onToggleMap = onToggleMap
                             )
@@ -785,12 +909,13 @@ private fun AroundContent(
                                 .weight(1f)
                                 .fillMaxWidth()
                         ) {
+                            val route = activeGuidedWalk?.stops ?: walkStops
                             MonumentsMap(
                                 monuments = visible,
                                 centerLat = effective.lat,
                                 centerLon = effective.lon,
                                 onSelectMonument = onSelectMonument,
-                                walkRoute = walkStops?.map { it.monument }
+                                walkRoute = route?.map { it.monument }
                             )
                             // Retour toujours visible sur la carte (le geste
                             // retour système ramène aussi à la liste)
@@ -801,7 +926,9 @@ private fun AroundContent(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(onClick = onToggleMap) { Text("← Liste") }
-                                if (walkStops != null) {
+                                // En balade guidée, l'itinéraire s'arrête via la
+                                // barre d'étape (✕), pas ici
+                                if (walkStops != null && activeGuidedWalk == null) {
                                     Button(onClick = { walkStops = null }) { Text("✕ Itinéraire") }
                                 }
                             }
@@ -824,7 +951,7 @@ private fun AroundContent(
                                 sortByYear = sortByYear,
                                 onToggleSort = { sortByYear = !sortByYear },
                                 onOpenCamera = onOpenCamera,
-                                onShowWalk = { showWalk = true },
+                                onShowWalk = { onShowWalkChange(true) },
                                 showMap = false,
                                 onToggleMap = onToggleMap
                             )
@@ -902,18 +1029,18 @@ private fun AroundContent(
 
     if (showWalk && effective != null) {
         WalkDialog(
-            stops = viewModel.buildWalk(effective.monuments, effective.lat, effective.lon),
-            onDismiss = { showWalk = false },
+            walks = viewModel.buildThemedWalks(effective.monuments, effective.lat, effective.lon),
+            onDismiss = { onShowWalkChange(false) },
             onNavigate = onNavigate,
             onShowOnMap = { stops ->
                 walkStops = stops
-                showWalk = false
+                onShowWalkChange(false)
                 onOpenMap()
             },
             onStartGuided = { stops ->
                 if (viewModel.startGuidedWalk(stops)) {
                     walkStops = stops
-                    showWalk = false
+                    onShowWalkChange(false)
                     onOpenMap()
                     onMessage("🥾 Balade guidée lancée — je te parle à chaque étape")
                 } else {
@@ -930,11 +1057,13 @@ private fun AroundContent(
 }
 
 /**
- * Dialog de balade : chaîne des monuments les plus proches, étape par étape.
+ * Dialog des balades : plusieurs circuits thématiques composés depuis les
+ * résultats (grande balade, essentiel, catégories, époques). Choisir une
+ * balade ouvre ses étapes et les actions (guidée, carte, Maps, GPX).
  */
 @Composable
 private fun WalkDialog(
-    stops: List<MonumentsViewModel.WalkStop>,
+    walks: List<MonumentsViewModel.ThemedWalk>,
     onDismiss: () -> Unit,
     onNavigate: (Monument) -> Unit,
     onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit,
@@ -942,63 +1071,91 @@ private fun WalkDialog(
     onOpenCircuit: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     val context = LocalContext.current
+    // Une seule proposition → on l'ouvre directement
+    var selected by remember { mutableStateOf(walks.singleOrNull()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("🥾 Balade à pied") },
+        title = { Text(selected?.title ?: "🥾 Balades à pied") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    "Chaîne des monuments les plus proches — touche une étape pour l'itinéraire.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Spacer(Modifier.height(8.dp))
-                stops.forEachIndexed { index, stop ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onNavigate(stop.monument) }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "${index + 1}.",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(stop.monument.name, style = MaterialTheme.typography.bodyLarge)
+                val current = selected
+                if (current == null) {
+                    Text(
+                        "Des circuits composés à partir des monuments trouvés — choisis ta balade.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    walks.forEach { walk ->
+                        val total = walk.stops.last().cumulativeM
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selected = walk }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            Text(walk.title, style = MaterialTheme.typography.bodyLarge)
                             Text(
-                                "${formatDistance(stop.stepM)} · total ${formatDistance(stop.cumulativeM)} (~${(stop.cumulativeM / 80).roundToInt()} min)",
+                                "${walk.stops.size} étapes · ${formatDistance(total)} " +
+                                    "(~${(total / 80).roundToInt()} min)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                }
-                if (stops.isNotEmpty()) {
+                    if (walks.isEmpty()) {
+                        Text("Pas assez de monuments pour composer une balade.")
+                    }
+                } else {
+                    if (walks.size > 1) {
+                        TextButton(onClick = { selected = null }) { Text("← Autres balades") }
+                    }
+                    Text(
+                        "Touche une étape pour son itinéraire.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    current.stops.forEachIndexed { index, stop ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onNavigate(stop.monument) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${index + 1}.",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(stop.monument.name, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "${formatDistance(stop.stepM)} · total ${formatDistance(stop.cumulativeM)} (~${(stop.cumulativeM / 80).roundToInt()} min)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     // Itinéraire piéton complet (toutes les étapes) dans Google Maps
-                    TextButton(onClick = { onOpenCircuit(stops) }) {
+                    TextButton(onClick = { onOpenCircuit(current.stops) }) {
                         Text("🧭 Circuit dans Google Maps")
                     }
-                    TextButton(onClick = { exportWalkGpx(context, stops) }) {
+                    TextButton(onClick = { exportWalkGpx(context, current.stops) }) {
                         Text("💾 Exporter la balade (GPX)")
                     }
                 }
             }
         },
         confirmButton = {
-            Row {
-                TextButton(
-                    onClick = { onShowOnMap(stops) },
-                    enabled = stops.isNotEmpty()
-                ) { Text("🗺️ Carte") }
-                // Balade guidée : suivi GPS + lecture audio à chaque étape
-                TextButton(
-                    onClick = { onStartGuided(stops) },
-                    enabled = stops.isNotEmpty()
-                ) { Text("▶ Guidée") }
+            selected?.let { walk ->
+                Row {
+                    TextButton(onClick = { onShowOnMap(walk.stops) }) { Text("🗺️ Carte") }
+                    // Balade guidée : suivi GPS + lecture audio à chaque étape
+                    TextButton(onClick = { onStartGuided(walk.stops) }) { Text("▶ Guidée") }
+                }
             }
         },
         dismissButton = {
