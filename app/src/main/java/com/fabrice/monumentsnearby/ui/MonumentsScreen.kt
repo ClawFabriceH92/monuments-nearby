@@ -375,6 +375,11 @@ fun MonumentsScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        // Tap : revenir à la carte et à l'itinéraire
+                                        .clickable {
+                                            selectedTab = AppTab.AROUND
+                                            showMap = true
+                                        }
                                         .padding(horizontal = 16.dp, vertical = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -854,6 +859,9 @@ private fun AroundContent(
     val context = LocalContext.current
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    // Balade guidée active : son itinéraire s'affiche sur la carte même si
+    // l'état local walkStops a été perdu (rotation, changement d'onglet)
+    val activeGuidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
     // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
     val effective = when (state) {
         is UiState.Success ->
@@ -901,12 +909,13 @@ private fun AroundContent(
                                 .weight(1f)
                                 .fillMaxWidth()
                         ) {
+                            val route = activeGuidedWalk?.stops ?: walkStops
                             MonumentsMap(
                                 monuments = visible,
                                 centerLat = effective.lat,
                                 centerLon = effective.lon,
                                 onSelectMonument = onSelectMonument,
-                                walkRoute = walkStops?.map { it.monument }
+                                walkRoute = route?.map { it.monument }
                             )
                             // Retour toujours visible sur la carte (le geste
                             // retour système ramène aussi à la liste)
@@ -917,7 +926,9 @@ private fun AroundContent(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(onClick = onToggleMap) { Text("← Liste") }
-                                if (walkStops != null) {
+                                // En balade guidée, l'itinéraire s'arrête via la
+                                // barre d'étape (✕), pas ici
+                                if (walkStops != null && activeGuidedWalk == null) {
                                     Button(onClick = { walkStops = null }) { Text("✕ Itinéraire") }
                                 }
                             }
