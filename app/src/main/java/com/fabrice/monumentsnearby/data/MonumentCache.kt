@@ -85,6 +85,14 @@ object MonumentCache {
         .putOpt("website", m.website)
         .putOpt("openingHours", m.openingHours)
         .putOpt("fee", m.fee)
+        .putOpt("heritageYear", m.heritageYear)
+        .putOpt("merimeeRef", m.merimeeRef)
+        .putOpt("museofileRef", m.museofileRef)
+        .putOpt("namedAfter", m.namedAfter)
+        .put("events", JSONArray(m.events))
+        .putOpt("openedYear", m.openedYear)
+        .putOpt("address", m.address)
+        .putOpt("commune", m.commune)
         .put("important", m.important)
 
     private fun fromJson(o: JSONObject): Monument? {
@@ -115,6 +123,18 @@ object MonumentCache {
             website = opt("website"),
             openingHours = opt("openingHours"),
             fee = opt("fee"),
+            heritageYear = opt("heritageYear"),
+            merimeeRef = opt("merimeeRef"),
+            museofileRef = opt("museofileRef"),
+            namedAfter = opt("namedAfter"),
+            events = o.optJSONArray("events")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    arr.optString(i).takeIf { it.isNotBlank() }
+                }
+            } ?: emptyList(),
+            openedYear = opt("openedYear"),
+            address = opt("address"),
+            commune = opt("commune"),
             important = o.optBoolean("important", false)
         )
     }

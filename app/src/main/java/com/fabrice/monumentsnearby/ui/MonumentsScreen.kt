@@ -159,14 +159,19 @@ fun MonumentsScreen(
         if (success != null) lastTitle = success.title
     }
     val isMuseumMode = success?.mode == AppMode.MUSEUM
+    // La carte n'est réellement affichable qu'avec des résultats « Autour de
+    // moi » (état courant ou dernier résultat) — sinon un showMap=true restauré
+    // après mort de process ferait intercepter le geste retour pour rien.
+    val lastAround by viewModel.lastMonuments.collectAsStateWithLifecycle()
+    val mapDisplayable = success?.mode == AppMode.MONUMENTS || lastAround != null
 
     // Navigation retour (bouton/geste système) : on remonte la hiérarchie
     // écran par écran au lieu de quitter l'app — fiche → écran précédent,
     // caméra → retour, œuvres d'un musée → recherche, carte → liste,
     // autre onglet → Autour de moi. Sans état à dépiler, le retour quitte.
     BackHandler(
-        enabled = selectedMonument != null || showCamera || showMap ||
-            selectedTab != AppTab.AROUND
+        enabled = selectedMonument != null || showCamera ||
+            (showMap && mapDisplayable) || selectedTab != AppTab.AROUND
     ) {
         when {
             selectedMonument != null -> {
@@ -179,7 +184,7 @@ fun MonumentsScreen(
                 selectedMuseum = null
             }
             selectedTab != AppTab.AROUND -> selectedTab = AppTab.AROUND
-            showMap -> showMap = false
+            showMap && mapDisplayable -> showMap = false
         }
     }
 
@@ -224,6 +229,7 @@ fun MonumentsScreen(
         MonumentDetailScreen(
             monument = selectedMonument!!,
             viewModel = viewModel,
+            snackbarHostState = snackbarHostState,
             onClose = {
                 selectedMonument = null
                 viewModel.clearMonumentImages()
@@ -374,7 +380,7 @@ fun MonumentsScreen(
                 }
             },
             floatingActionButton = {
-                if (selectedTab == AppTab.AROUND && showMap && !isMuseumMode) {
+                if (selectedTab == AppTab.AROUND && showMap && mapDisplayable && !isMuseumMode) {
                     ExtendedFloatingActionButton(
                         text = { Text("🏛 Musées ici") },
                         icon = {},
@@ -412,6 +418,7 @@ fun MonumentsScreen(
                                 ?.takeIf { it.mode == AppMode.MONUMENTS }
                                 ?: viewModel.lastMonuments.value
                             if (s != null) {
+                                snackbarHostState.currentSnackbarData?.dismiss()
                                 cameraState = s
                                 showCamera = true
                             }
@@ -1016,6 +1023,14 @@ private fun MuseumSearchForm(
     val museumResults by viewModel.museumResults.collectAsStateWithLifecycle()
     val cityMuseums by viewModel.cityMuseums.collectAsStateWithLifecycle()
 
+    // Requête restaurée (rememberSaveable) sans résultats en mémoire :
+    // relancer la recherche au lieu d'afficher « Aucun musée trouvé » à tort
+    LaunchedEffect(Unit) {
+        if (searchQuery.isNotBlank() && museumResults.isEmpty() && !searching) {
+            viewModel.searchMuseums(searchQuery)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1064,7 +1079,9 @@ private fun MuseumSearchForm(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
-                    if (cityQuery.isNotBlank()) viewModel.loadMuseumsInCity(cityQuery)
+                    if (cityQuery.isNotBlank() && !searching) {
+                        viewModel.loadMuseumsInCity(cityQuery)
+                    }
                 }),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1409,6 +1426,7 @@ private fun shareBook(
 private fun MonumentDetailScreen(
     monument: Monument,
     viewModel: MonumentsViewModel,
+    snackbarHostState: SnackbarHostState,
     onClose: () -> Unit,
     onHome: () -> Unit,
     onListen: () -> Unit,
@@ -1423,7 +1441,6 @@ private fun MonumentDetailScreen(
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
     val notify: (String) -> Unit = { msg ->
         scope.launch { snackbarHostState.showSnackbar(msg) }
     }

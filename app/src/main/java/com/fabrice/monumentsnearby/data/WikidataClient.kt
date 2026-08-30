@@ -232,18 +232,31 @@ object WikidataClient {
         val architect = firstItemLabel(claims, "P84", typeLabels)
         val style = firstItemLabel(claims, "P149", typeLabels)
         val material = firstItemLabel(claims, "P186", typeLabels)
-        val heritage = firstItemLabel(claims, "P1435", typeLabels)
         val founder = firstItemLabel(claims, "P112", typeLabels)
         val owner = firstItemLabel(claims, "P127", typeLabels)
         val namedAfter = firstItemLabel(claims, "P138", typeLabels)
         val commune = firstItemLabel(claims, "P131", typeLabels)
 
-        // Année du classement : qualificatif P580 (date de début) du premier P1435
-        val heritageYear = claims?.optJSONArray("P1435")
-            ?.optJSONObject(0)?.optJSONObject("qualifiers")
-            ?.optJSONArray("P580")?.optJSONObject(0)
-            ?.optJSONObject("datavalue")?.optJSONObject("value")
-            ?.optString("time")?.let(::yearOf)
+        // Classement patrimonial : label et année (qualificatif P580) pris sur
+        // le MÊME claim, en ignorant les statements dépréciés
+        var heritage: String? = null
+        var heritageYear: String? = null
+        claims?.optJSONArray("P1435")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val claim = arr.optJSONObject(i) ?: continue
+                if (claim.optString("rank") == "deprecated") continue
+                val value = claim.optJSONObject("mainsnak")
+                    ?.optJSONObject("datavalue")?.optJSONObject("value")
+                if (value?.optString("entity-type") != "item") continue
+                val resolved = typeLabels[value.optString("id")] ?: continue
+                heritage = resolved
+                heritageYear = claim.optJSONObject("qualifiers")
+                    ?.optJSONArray("P580")?.optJSONObject(0)
+                    ?.optJSONObject("datavalue")?.optJSONObject("value")
+                    ?.optString("time")?.let(::yearOf)
+                break
+            }
+        }
 
         // Identifiants pivots vers les bases patrimoniales officielles :
         // P380 = référence Mérimée, P539 = identifiant Muséofile (notices POP)
@@ -256,11 +269,23 @@ object WikidataClient {
             ?.optJSONObject("datavalue")?.optJSONObject("value")
             ?.optString("time")?.let(::yearOf)
 
-        // Adresse postale (P6375, texte monolingue)
-        val address = claims?.optJSONArray("P6375")
-            ?.optJSONObject(0)?.optJSONObject("mainsnak")
-            ?.optJSONObject("datavalue")?.optJSONObject("value")
-            ?.optString("text")?.takeIf { it.isNotBlank() }
+        // Adresse postale (P6375, texte monolingue) : valeur FR de préférence,
+        // repli sur le premier statement non déprécié
+        var address: String? = null
+        claims?.optJSONArray("P6375")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val claim = arr.optJSONObject(i) ?: continue
+                if (claim.optString("rank") == "deprecated") continue
+                val value = claim.optJSONObject("mainsnak")
+                    ?.optJSONObject("datavalue")?.optJSONObject("value") ?: continue
+                val text = value.optString("text").takeIf { it.isNotBlank() } ?: continue
+                if (value.optString("language") == "fr") {
+                    address = text
+                    break
+                }
+                if (address == null) address = text
+            }
+        }
 
         // Événements marquants (P793) : label + année (qualificatif P585)
         val events = mutableListOf<String>()
@@ -331,9 +356,16 @@ object WikidataClient {
         return null
     }
 
-    /** "+1889-03-31T00:00:00Z" → "1889". Null si année absente (dates av. J.-C.). */
-    private fun yearOf(time: String): String? =
-        time.trimStart('+').takeWhile { it != '-' }.takeIf { it.isNotBlank() }
+    /** "+1889-03-31T00:00:00Z" → "1889", "-0450-…" → "450 av. J.-C.". */
+    internal fun yearOf(time: String): String? {
+        val avJc = time.startsWith("-")
+        val digits = time.trimStart('+', '-').takeWhile { it != '-' }.trimStart('0')
+        return when {
+            digits.isBlank() -> null
+            avJc -> "$digits av. J.-C."
+            else -> digits
+        }
+    }
 
     /** Premier label FR d'une propriété de type « item » (P84, P149…). */
     private fun firstItemLabel(
