@@ -13,6 +13,8 @@ import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.MonumentCache
 import com.fabrice.monumentsnearby.data.OverpassClient
 import com.fabrice.monumentsnearby.data.VisitRepository
+import com.fabrice.monumentsnearby.data.WalkQuiz
+import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.location.GeofenceHelper
@@ -445,6 +447,14 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     private val _walkArrival = MutableStateFlow<WalkArrival?>(null)
     val walkArrival: StateFlow<WalkArrival?> = _walkArrival
 
+    /** Quiz de fin de balade — non nul quand la balade guidée est terminée. */
+    private val _walkQuiz = MutableStateFlow<List<WalkQuiz.Question>?>(null)
+    val walkQuiz: StateFlow<List<WalkQuiz.Question>?> = _walkQuiz
+
+    fun consumeWalkQuiz() {
+        _walkQuiz.value = null
+    }
+
     fun consumeWalkArrival() {
         _walkArrival.value = null
     }
@@ -476,14 +486,12 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         val distance = haversineM(lat, lon, stop.monument.lat, stop.monument.lon)
         if (distance <= WALK_ARRIVAL_M) {
             val last = walk.nextIndex == walk.stops.lastIndex
-            _walkArrival.value = WalkArrival(
-                monument = stop.monument,
-                stepIndex = walk.nextIndex,
-                totalSteps = walk.stops.size,
-                lastStep = last
-            )
             if (last) {
                 // Fin de balade : on coupe le suivi, l'UI lit la dernière étape
+                // puis propose le quiz (posé AVANT walkArrival pour que la
+                // lecture de fin puisse l'annoncer)
+                _walkQuiz.value = WalkQuiz.build(walk.stops.map { it.monument })
+                    .takeIf { it.isNotEmpty() }
                 walkTracker.stop()
                 _guidedWalk.value = null
             } else {
@@ -492,6 +500,12 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                     distanceToNextM = null
                 )
             }
+            _walkArrival.value = WalkArrival(
+                monument = stop.monument,
+                stepIndex = walk.nextIndex,
+                totalSteps = walk.stops.size,
+                lastStep = last
+            )
         } else {
             _guidedWalk.value = walk.copy(distanceToNextM = distance)
         }
@@ -548,6 +562,56 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
             curLon = next.lon
         }
         return stops
+    }
+
+    /** Une balade proposée : titre thématique + itinéraire. */
+    data class ThemedWalk(val title: String, val stops: List<WalkStop>)
+
+    /**
+     * Compose plusieurs balades à partir des résultats : la grande balade,
+     * l'essentiel (majeurs), puis par catégorie et par époque quand au moins
+     * trois monuments s'y prêtent. Les doublons d'itinéraire sont écartés.
+     */
+    fun buildThemedWalks(
+        monuments: List<Monument>,
+        startLat: Double,
+        startLon: Double
+    ): List<ThemedWalk> {
+        val walks = mutableListOf<ThemedWalk>()
+        val seenRoutes = mutableSetOf<Set<String>>()
+
+        fun propose(title: String, subset: List<Monument>, maxStops: Int = 8) {
+            if (subset.size < 3) return
+            val stops = buildWalk(subset, startLat, startLon, maxStops)
+            if (stops.size < 3) return
+            val route = stops.map { it.monument.id }.toSet()
+            if (!seenRoutes.add(route)) return // même itinéraire qu'une balade déjà proposée
+            walks.add(ThemedWalk(title, stops))
+        }
+
+        // La grande balade d'abord (2 étapes suffisent pour elle)
+        val grande = buildWalk(monuments, startLat, startLon)
+        if (grande.size >= 2) {
+            seenRoutes.add(grande.map { it.monument.id }.toSet())
+            walks.add(ThemedWalk("🥾 La grande balade", grande))
+        }
+        propose("⭐ L'essentiel", monuments.filter { it.important }, maxStops = 6)
+
+        propose("⛪ Patrimoine religieux", monuments.filter { it.category() == "religieux" })
+        propose("🏰 Châteaux et palais", monuments.filter { it.category() == "château" })
+        propose("🏛 D'un musée à l'autre", monuments.filter { it.category() == "musée" })
+        propose("🗿 Monuments et mémoriaux", monuments.filter { it.category() == "monument" })
+        propose("🏚 Ruines et vestiges", monuments.filter { it.category() == "ruines" })
+
+        fun year(m: Monument): Int? = m.inception?.toIntOrNull()
+        propose("🏺 Balade médiévale (avant 1500)", monuments.filter { (year(it) ?: 9999) < 1500 })
+        propose(
+            "👑 Balade classique (XVIᵉ-XVIIIᵉ)",
+            monuments.filter { (year(it) ?: 0) in 1500..1799 }
+        )
+        propose("🏙 Balade moderne (XIXᵉ-XXᵉ)", monuments.filter { (year(it) ?: 0) >= 1800 })
+
+        return walks
     }
 
     private fun haversineM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
