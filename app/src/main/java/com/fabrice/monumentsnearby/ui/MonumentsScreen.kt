@@ -188,6 +188,33 @@ fun MonumentsScreen(
         }
     }
 
+    // Balade guidée : barre d'étape + lecture audio automatique à l'arrivée
+    val guidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
+    val walkArrival by viewModel.walkArrival.collectAsStateWithLifecycle()
+    LaunchedEffect(walkArrival) {
+        val arrival = walkArrival ?: return@LaunchedEffect
+        speakerActive.value = true
+        speakingTitle.value = arrival.monument.name
+        val next = viewModel.guidedWalk.value?.let { w -> w.stops.getOrNull(w.nextIndex) }
+        speaker.speak(
+            buildString {
+                append("Étape ${arrival.stepIndex + 1} sur ${arrival.totalSteps} : ")
+                append("${arrival.monument.name}. ")
+                append(arrival.monument.description ?: "Regarde autour de toi !")
+                when {
+                    arrival.lastStep ->
+                        append(" C'était la dernière étape. Belle balade !")
+                    next != null ->
+                        append(
+                            " Prochaine étape : ${next.monument.name}, " +
+                                "à ${spokenDistance(next.stepM)}."
+                        )
+                }
+            }
+        )
+        viewModel.consumeWalkArrival()
+    }
+
     val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
     DisposableEffect(guidedVisit) {
         speaker.onFinished = {
@@ -334,6 +361,36 @@ fun MonumentsScreen(
             },
             bottomBar = {
                 Column {
+                    // Balade guidée en cours : prochaine étape + distance restante
+                    guidedWalk?.let { walk ->
+                        walk.stops.getOrNull(walk.nextIndex)?.let { nextStop ->
+                            Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "🥾 ${walk.nextIndex + 1}/${walk.stops.size} · " +
+                                            nextStop.monument.name +
+                                            (walk.distanceToNextM
+                                                ?.let { " — ${formatDistance(it)}" } ?: ""),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.stopGuidedWalk() },
+                                        modifier = Modifier.semantics {
+                                            contentDescription = "Arrêter la balade guidée"
+                                        }
+                                    ) { Text("✕") }
+                                }
+                            }
+                        }
+                    }
                     // Barre de lecture flottante, visible seulement pendant l'écoute
                     if (speakerActive.value) {
                         LectureBar(
@@ -851,6 +908,16 @@ private fun AroundContent(
                 walkStops = stops
                 showWalk = false
                 onOpenMap()
+            },
+            onStartGuided = { stops ->
+                if (viewModel.startGuidedWalk(stops)) {
+                    walkStops = stops
+                    showWalk = false
+                    onOpenMap()
+                    onMessage("🥾 Balade guidée lancée — je te parle à chaque étape")
+                } else {
+                    onMessage("Autorise la localisation précise pour la balade guidée")
+                }
             }
         )
     }
@@ -864,7 +931,8 @@ private fun WalkDialog(
     stops: List<MonumentsViewModel.WalkStop>,
     onDismiss: () -> Unit,
     onNavigate: (Monument) -> Unit,
-    onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit
+    onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit,
+    onStartGuided: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     val context = LocalContext.current
     AlertDialog(
@@ -910,10 +978,17 @@ private fun WalkDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onShowOnMap(stops) },
-                enabled = stops.isNotEmpty()
-            ) { Text("🗺️ Sur la carte") }
+            Row {
+                TextButton(
+                    onClick = { onShowOnMap(stops) },
+                    enabled = stops.isNotEmpty()
+                ) { Text("🗺️ Carte") }
+                // Balade guidée : suivi GPS + lecture audio à chaque étape
+                TextButton(
+                    onClick = { onStartGuided(stops) },
+                    enabled = stops.isNotEmpty()
+                ) { Text("▶ Guidée") }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Fermer") }
@@ -2007,6 +2082,33 @@ private fun SettingsDialog(
     val context = LocalContext.current
     val voices = speaker.voices
     val radius by viewModel.searchRadiusM.collectAsStateWithLifecycle()
+    // Balade guidée : barre d'étape + lecture audio automatique à l'arrivée
+    val guidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
+    val walkArrival by viewModel.walkArrival.collectAsStateWithLifecycle()
+    LaunchedEffect(walkArrival) {
+        val arrival = walkArrival ?: return@LaunchedEffect
+        speakerActive.value = true
+        speakingTitle.value = arrival.monument.name
+        val next = viewModel.guidedWalk.value?.let { w -> w.stops.getOrNull(w.nextIndex) }
+        speaker.speak(
+            buildString {
+                append("Étape ${arrival.stepIndex + 1} sur ${arrival.totalSteps} : ")
+                append("${arrival.monument.name}. ")
+                append(arrival.monument.description ?: "Regarde autour de toi !")
+                when {
+                    arrival.lastStep ->
+                        append(" C'était la dernière étape. Belle balade !")
+                    next != null ->
+                        append(
+                            " Prochaine étape : ${next.monument.name}, " +
+                                "à ${spokenDistance(next.stepM)}."
+                        )
+                }
+            }
+        )
+        viewModel.consumeWalkArrival()
+    }
+
     val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
     val dailyDiscovery by viewModel.dailyDiscovery.collectAsStateWithLifecycle()
     var autoUpdate by remember { mutableStateOf(UpdateManager.autoUpdateEnabled(context)) }
@@ -2473,6 +2575,14 @@ private fun MonumentCard(
         }
     }
 }
+
+/** Distance en toutes lettres pour l'audioguide (« 240 mètres », « 1,3 kilomètre »). */
+private fun spokenDistance(m: Double): String =
+    if (m >= 1000) {
+        "%.1f".format(m / 1000).replace('.', ',') + " kilomètre" + if (m >= 2000) "s" else ""
+    } else {
+        "${m.roundToInt()} mètres"
+    }
 
 fun formatDistance(m: Double): String =
     if (m >= 1000) "%.1f km".format(m / 1000).replace('.', ',') else "${m.roundToInt()} m"
