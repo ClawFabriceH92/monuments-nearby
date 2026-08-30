@@ -188,6 +188,33 @@ fun MonumentsScreen(
         }
     }
 
+    // Balade guidée : barre d'étape + lecture audio automatique à l'arrivée
+    val guidedWalk by viewModel.guidedWalk.collectAsStateWithLifecycle()
+    val walkArrival by viewModel.walkArrival.collectAsStateWithLifecycle()
+    LaunchedEffect(walkArrival) {
+        val arrival = walkArrival ?: return@LaunchedEffect
+        speakerActive.value = true
+        speakingTitle.value = arrival.monument.name
+        val next = viewModel.guidedWalk.value?.let { w -> w.stops.getOrNull(w.nextIndex) }
+        speaker.speak(
+            buildString {
+                append("Étape ${arrival.stepIndex + 1} sur ${arrival.totalSteps} : ")
+                append("${arrival.monument.name}. ")
+                append(arrival.monument.description ?: "Regarde autour de toi !")
+                when {
+                    arrival.lastStep ->
+                        append(" C'était la dernière étape. Belle balade !")
+                    next != null ->
+                        append(
+                            " Prochaine étape : ${next.monument.name}, " +
+                                "à ${spokenDistance(next.stepM)}."
+                        )
+                }
+            }
+        )
+        viewModel.consumeWalkArrival()
+    }
+
     val guidedVisit by viewModel.guidedVisit.collectAsStateWithLifecycle()
     DisposableEffect(guidedVisit) {
         speaker.onFinished = {
@@ -334,6 +361,36 @@ fun MonumentsScreen(
             },
             bottomBar = {
                 Column {
+                    // Balade guidée en cours : prochaine étape + distance restante
+                    guidedWalk?.let { walk ->
+                        walk.stops.getOrNull(walk.nextIndex)?.let { nextStop ->
+                            Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "🥾 ${walk.nextIndex + 1}/${walk.stops.size} · " +
+                                            nextStop.monument.name +
+                                            (walk.distanceToNextM
+                                                ?.let { " — ${formatDistance(it)}" } ?: ""),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.stopGuidedWalk() },
+                                        modifier = Modifier.semantics {
+                                            contentDescription = "Arrêter la balade guidée"
+                                        }
+                                    ) { Text("✕") }
+                                }
+                            }
+                        }
+                    }
                     // Barre de lecture flottante, visible seulement pendant l'écoute
                     if (speakerActive.value) {
                         LectureBar(
@@ -677,6 +734,7 @@ private fun AroundContent(
     onLocate: () -> Unit,
     onOpenCamera: () -> Unit
 ) {
+    val context = LocalContext.current
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     // Si le state courant est musée/ville, on montre le dernier résultat « autour de moi »
@@ -851,6 +909,21 @@ private fun AroundContent(
                 walkStops = stops
                 showWalk = false
                 onOpenMap()
+            },
+            onStartGuided = { stops ->
+                if (viewModel.startGuidedWalk(stops)) {
+                    walkStops = stops
+                    showWalk = false
+                    onOpenMap()
+                    onMessage("🥾 Balade guidée lancée — je te parle à chaque étape")
+                } else {
+                    onMessage("Autorise la localisation précise pour la balade guidée")
+                }
+            },
+            onOpenCircuit = { stops ->
+                if (!openWalkCircuit(context, effective.lat, effective.lon, stops)) {
+                    onMessage("Aucune application de cartes installée")
+                }
             }
         )
     }
@@ -864,7 +937,9 @@ private fun WalkDialog(
     stops: List<MonumentsViewModel.WalkStop>,
     onDismiss: () -> Unit,
     onNavigate: (Monument) -> Unit,
-    onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit
+    onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit,
+    onStartGuided: (List<MonumentsViewModel.WalkStop>) -> Unit,
+    onOpenCircuit: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     val context = LocalContext.current
     AlertDialog(
@@ -903,6 +978,10 @@ private fun WalkDialog(
                 }
                 if (stops.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
+                    // Itinéraire piéton complet (toutes les étapes) dans Google Maps
+                    TextButton(onClick = { onOpenCircuit(stops) }) {
+                        Text("🧭 Circuit dans Google Maps")
+                    }
                     TextButton(onClick = { exportWalkGpx(context, stops) }) {
                         Text("💾 Exporter la balade (GPX)")
                     }
@@ -910,10 +989,17 @@ private fun WalkDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onShowOnMap(stops) },
-                enabled = stops.isNotEmpty()
-            ) { Text("🗺️ Sur la carte") }
+            Row {
+                TextButton(
+                    onClick = { onShowOnMap(stops) },
+                    enabled = stops.isNotEmpty()
+                ) { Text("🗺️ Carte") }
+                // Balade guidée : suivi GPS + lecture audio à chaque étape
+                TextButton(
+                    onClick = { onStartGuided(stops) },
+                    enabled = stops.isNotEmpty()
+                ) { Text("▶ Guidée") }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Fermer") }
@@ -2474,6 +2560,14 @@ private fun MonumentCard(
     }
 }
 
+/** Distance en toutes lettres pour l'audioguide (« 240 mètres », « 1,3 kilomètre »). */
+private fun spokenDistance(m: Double): String =
+    if (m >= 1000) {
+        "%.1f".format(m / 1000).replace('.', ',') + " kilomètre" + if (m >= 2000) "s" else ""
+    } else {
+        "${m.roundToInt()} mètres"
+    }
+
 fun formatDistance(m: Double): String =
     if (m >= 1000) "%.1f km".format(m / 1000).replace('.', ',') else "${m.roundToInt()} m"
 
@@ -2481,6 +2575,37 @@ private fun guideText(m: Monument): String {
     val desc = m.description?.takeIf { it.isNotBlank() } ?: "Aucune description disponible."
     val artist = m.artist?.let { " Par $it." } ?: ""
     return "${m.name}. ${m.kind.replace('_', ' ')}.$artist $desc"
+}
+
+/**
+ * Ouvre le circuit complet de la balade dans Google Maps (itinéraire piéton
+ * multi-étapes : position de départ → étapes → dernière étape). L'URL Maps
+ * accepte jusqu'à 9 waypoints — nos balades font 8 étapes au plus.
+ */
+private fun openWalkCircuit(
+    context: Context,
+    startLat: Double,
+    startLon: Double,
+    stops: List<MonumentsViewModel.WalkStop>
+): Boolean {
+    if (stops.isEmpty()) return false
+    fun pt(lat: Double, lon: Double) = "$lat,$lon"
+    val destination = stops.last().monument
+    val waypoints = stops.dropLast(1)
+        .joinToString("|") { pt(it.monument.lat, it.monument.lon) }
+    val url = buildString {
+        append("https://www.google.com/maps/dir/?api=1")
+        append("&origin=").append(pt(startLat, startLon))
+        append("&destination=").append(pt(destination.lat, destination.lon))
+        if (waypoints.isNotEmpty()) append("&waypoints=").append(Uri.encode(waypoints))
+        append("&travelmode=walking")
+    }
+    return try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        true
+    } catch (e: Exception) {
+        false
+    }
 }
 
 /** Ouvre l'itinéraire. Retourne false si aucune app de cartes n'est installée. */

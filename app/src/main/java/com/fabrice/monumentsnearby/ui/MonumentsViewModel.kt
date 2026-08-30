@@ -16,6 +16,7 @@ import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WikidataClient
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.location.GeofenceHelper
+import com.fabrice.monumentsnearby.location.WalkTracker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -415,6 +416,95 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 "Position introuvable. Vérifie que le GPS est activé et dehors/à la fenêtre."
             )
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Balade guidée — suivi GPS actif, lecture audio à chaque étape
+    // ---------------------------------------------------------------
+
+    /** Balade guidée en cours : étapes, prochaine étape, distance restante. */
+    data class GuidedWalk(
+        val stops: List<WalkStop>,
+        val nextIndex: Int,
+        val distanceToNextM: Double? = null
+    )
+
+    /** Étape atteinte — consommée par l'UI qui lance la lecture audio. */
+    data class WalkArrival(
+        val monument: Monument,
+        val stepIndex: Int,
+        val totalSteps: Int,
+        val lastStep: Boolean
+    )
+
+    private val walkTracker = WalkTracker(application)
+
+    private val _guidedWalk = MutableStateFlow<GuidedWalk?>(null)
+    val guidedWalk: StateFlow<GuidedWalk?> = _guidedWalk
+
+    private val _walkArrival = MutableStateFlow<WalkArrival?>(null)
+    val walkArrival: StateFlow<WalkArrival?> = _walkArrival
+
+    fun consumeWalkArrival() {
+        _walkArrival.value = null
+    }
+
+    /**
+     * Démarre la balade guidée : la position est suivie en continu et
+     * l'arrivée à moins de [WALK_ARRIVAL_M] d'une étape émet [walkArrival].
+     * Retourne false si la localisation précise n'est pas disponible.
+     */
+    fun startGuidedWalk(stops: List<WalkStop>): Boolean {
+        if (stops.isEmpty()) return false
+        val started = walkTracker.start { lat, lon -> onWalkLocation(lat, lon) }
+        if (started) {
+            _walkArrival.value = null
+            _guidedWalk.value = GuidedWalk(stops, nextIndex = 0)
+        }
+        return started
+    }
+
+    fun stopGuidedWalk() {
+        walkTracker.stop()
+        _guidedWalk.value = null
+        _walkArrival.value = null
+    }
+
+    private fun onWalkLocation(lat: Double, lon: Double) {
+        val walk = _guidedWalk.value ?: return
+        val stop = walk.stops.getOrNull(walk.nextIndex) ?: return
+        val distance = haversineM(lat, lon, stop.monument.lat, stop.monument.lon)
+        if (distance <= WALK_ARRIVAL_M) {
+            val last = walk.nextIndex == walk.stops.lastIndex
+            _walkArrival.value = WalkArrival(
+                monument = stop.monument,
+                stepIndex = walk.nextIndex,
+                totalSteps = walk.stops.size,
+                lastStep = last
+            )
+            if (last) {
+                // Fin de balade : on coupe le suivi, l'UI lit la dernière étape
+                walkTracker.stop()
+                _guidedWalk.value = null
+            } else {
+                _guidedWalk.value = walk.copy(
+                    nextIndex = walk.nextIndex + 1,
+                    distanceToNextM = null
+                )
+            }
+        } else {
+            _guidedWalk.value = walk.copy(distanceToNextM = distance)
+        }
+    }
+
+    override fun onCleared() {
+        walkTracker.stop()
+        super.onCleared()
+    }
+
+    private companion object {
+        /** Rayon d'arrivée à une étape — sous 40 m, le GPS urbain divague. */
+        const val WALK_ARRIVAL_M = 40.0
     }
 
     // ---------------------------------------------------------------
