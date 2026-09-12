@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.text.TextPaint
 import android.text.TextUtils
 import android.view.MotionEvent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -182,7 +183,7 @@ private class LabelOverlay(
 ) : Overlay() {
 
     private val ordered = monuments.sortedByDescending { it.important }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 12f * density
         color = Color.rgb(26, 41, 72) // bleu nuit du thème
         typeface = Typeface.DEFAULT_BOLD
