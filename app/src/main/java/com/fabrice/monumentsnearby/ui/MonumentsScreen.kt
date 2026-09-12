@@ -31,6 +31,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -41,14 +52,20 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -110,7 +127,10 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-enum class AppTab { AROUND, MUSEUMS, CITY, BOOK }
+enum class AppTab { AROUND, EXPLORE, BOOK }
+
+/** Onglet Explorer : chercher ailleurs — une ville, ou un musée. */
+enum class ExploreMode { CITY, MUSEUM }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -125,6 +145,7 @@ fun MonumentsScreen(
 
     // rememberSaveable : survivre à la rotation et au retour depuis Maps
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.AROUND) }
+    var exploreMode by rememberSaveable { mutableStateOf(ExploreMode.CITY) }
     var showMap by rememberSaveable { mutableStateOf(false) }
     var showWalk by rememberSaveable { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -181,7 +202,8 @@ fun MonumentsScreen(
                 viewModel.clearMonumentImages()
             }
             showCamera -> showCamera = false
-            selectedTab == AppTab.MUSEUMS && !showMuseumSearch -> {
+            selectedTab == AppTab.EXPLORE && exploreMode == ExploreMode.MUSEUM &&
+                !showMuseumSearch -> {
                 showMuseumSearch = true
                 selectedMuseum = null
             }
@@ -290,7 +312,8 @@ fun MonumentsScreen(
                     lon = selectedMonument!!.lon
                 )
                 selectedMuseum = museum
-                selectedTab = AppTab.MUSEUMS
+                selectedTab = AppTab.EXPLORE
+                exploreMode = ExploreMode.MUSEUM
                 showMuseumSearch = false
                 selectedMonument = null
                 viewModel.clearMonumentImages()
@@ -329,39 +352,41 @@ fun MonumentsScreen(
                         Text(
                             when (selectedTab) {
                                 AppTab.AROUND -> lastTitle
-                                AppTab.MUSEUMS -> if (selectedMuseum != null) selectedMuseum!!.name else "Musées"
-                                AppTab.CITY -> "Ville"
+                                AppTab.EXPLORE ->
+                                    if (exploreMode == ExploreMode.MUSEUM && selectedMuseum != null) {
+                                        selectedMuseum!!.name
+                                    } else {
+                                        "Explorer"
+                                    }
                                 AppTab.BOOK -> "Carnet"
                             }
                         )
                     },
                     colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = Color.White
+                        titleContentColor = Color.White,
+                        actionIconContentColor = Color.White
                     ),
                     actions = {
-                        // Alerte monuments à proximité (géofencing)
+                        // Alerte de proximité : cloche dorée quand elle est active
                         val geofencesActive by viewModel.geofencesActive.collectAsStateWithLifecycle()
-                        TextButton(
-                            onClick = onToggleGeofences,
-                            modifier = Modifier.semantics {
+                        IconButton(onClick = onToggleGeofences) {
+                            Icon(
+                                Icons.Filled.Notifications,
                                 contentDescription = if (geofencesActive) {
                                     "Désactiver l'alerte de proximité"
                                 } else {
                                     "Activer l'alerte de proximité"
+                                },
+                                tint = if (geofencesActive) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    Color.White.copy(alpha = 0.55f)
                                 }
-                            }
-                        ) {
-                            Text(if (geofencesActive) "🔔" else "🔕")
+                            )
                         }
-                        // Réglages (recherche, mises à jour, audioguide)
-                        TextButton(
-                            onClick = { showSettingsDialog = true },
-                            modifier = Modifier.semantics {
-                                contentDescription = "Réglages"
-                            }
-                        ) {
-                            Text("⚙️")
+                        IconButton(onClick = { showSettingsDialog = true }) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Réglages")
                         }
                     }
                 )
@@ -416,59 +441,31 @@ fun MonumentsScreen(
                         NavigationBarItem(
                             selected = selectedTab == AppTab.AROUND,
                             onClick = { selectedTab = AppTab.AROUND },
-                            icon = { Text("📍") },
-                            label = {
-                                Text(
-                                    "Autour de moi",
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            icon = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
+                            label = { Text("Autour de moi", maxLines = 1, softWrap = false) }
                         )
                         NavigationBarItem(
-                            selected = selectedTab == AppTab.MUSEUMS,
-                            onClick = { selectedTab = AppTab.MUSEUMS },
-                            icon = { Text("🏛") },
-                            label = { Text("Musées") }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == AppTab.CITY,
-                            onClick = { selectedTab = AppTab.CITY },
-                            icon = { Text("🏙") },
-                            label = { Text("Ville") }
+                            selected = selectedTab == AppTab.EXPLORE,
+                            onClick = { selectedTab = AppTab.EXPLORE },
+                            icon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            label = { Text("Explorer") }
                         )
                         NavigationBarItem(
                             selected = selectedTab == AppTab.BOOK,
                             onClick = { selectedTab = AppTab.BOOK },
-                            icon = { Text("📒") },
+                            icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                             label = { Text("Carnet") }
                         )
                     }
                 }
             },
             floatingActionButton = {
-                if (selectedTab == AppTab.AROUND && !showMap && mapDisplayable && !isMuseumMode) {
-                    // Le point d'entrée des balades était enfoui dans la
-                    // barre d'outils : bouton flottant bien visible
+                // Balades : action phare, toujours à portée (liste comme carte)
+                if (selectedTab == AppTab.AROUND && mapDisplayable && !isMuseumMode) {
                     ExtendedFloatingActionButton(
                         text = { Text("🥾 Balades") },
                         icon = {},
                         onClick = { showWalk = true }
-                    )
-                } else if (selectedTab == AppTab.AROUND && showMap && mapDisplayable && !isMuseumMode) {
-                    ExtendedFloatingActionButton(
-                        text = { Text("🏛 Musées ici") },
-                        icon = {},
-                        onClick = {
-                            val s = state as? UiState.Success ?: return@ExtendedFloatingActionButton
-                            viewModel.loadMuseumsInZone(s.lat, s.lon)
-                            showMap = false
-                            selectedTab = AppTab.MUSEUMS
-                            showMuseumSearch = false
-                            selectedMuseum = null
-                        }
                     )
                 }
             }
@@ -492,6 +489,19 @@ fun MonumentsScreen(
                         onOpenMap = { showMap = true },
                         onSelectMonument = { selectedMonument = it },
                         onLocate = onLocate,
+                        onMuseumsHere = {
+                            val s = (state as? UiState.Success)
+                                ?.takeIf { it.mode == AppMode.MONUMENTS }
+                                ?: viewModel.lastMonuments.value
+                            if (s != null) {
+                                viewModel.loadMuseumsInZone(s.lat, s.lon)
+                                showMap = false
+                                selectedTab = AppTab.EXPLORE
+                                exploreMode = ExploreMode.MUSEUM
+                                showMuseumSearch = false
+                                selectedMuseum = null
+                            }
+                        },
                         onOpenCamera = {
                             val s = (state as? UiState.Success)
                                 ?.takeIf { it.mode == AppMode.MONUMENTS }
@@ -503,29 +513,54 @@ fun MonumentsScreen(
                             }
                         }
                     )
-                    AppTab.MUSEUMS -> MuseumContent(
-                        state = state,
-                        viewModel = viewModel,
-                        showMuseumSearch = showMuseumSearch,
-                        onShowMuseumSearch = { showMuseumSearch = true },
-                        onSelectMuseum = { museum ->
-                            selectedMuseum = museum
-                            showMuseumSearch = false
-                            viewModel.loadMuseumArtworks(museum)
-                        },
-                        onSelectMonument = { selectedMonument = it },
-                        onListen = listenMonument,
-                        onNavigate = navigateTo,
-                        onMessage = notify
-                    )
-                    AppTab.CITY -> CityContent(
-                        state = state,
-                        viewModel = viewModel,
-                        onSelectMonument = { selectedMonument = it },
-                        onListen = listenMonument,
-                        onNavigate = navigateTo,
-                        onMessage = notify
-                    )
+                    AppTab.EXPLORE -> Column(Modifier.fillMaxSize()) {
+                        // Explorer ailleurs : une ville, ou un musée et ses œuvres
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            SegmentedButton(
+                                selected = exploreMode == ExploreMode.CITY,
+                                onClick = { exploreMode = ExploreMode.CITY },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                label = { Text("🏙 Une ville") }
+                            )
+                            SegmentedButton(
+                                selected = exploreMode == ExploreMode.MUSEUM,
+                                onClick = { exploreMode = ExploreMode.MUSEUM },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                label = { Text("🏛 Un musée") }
+                            )
+                        }
+                        Box(Modifier.weight(1f)) {
+                            when (exploreMode) {
+                                ExploreMode.CITY -> CityContent(
+                                    state = state,
+                                    viewModel = viewModel,
+                                    onSelectMonument = { selectedMonument = it },
+                                    onListen = listenMonument,
+                                    onNavigate = navigateTo,
+                                    onMessage = notify
+                                )
+                                ExploreMode.MUSEUM -> MuseumContent(
+                                    state = state,
+                                    viewModel = viewModel,
+                                    showMuseumSearch = showMuseumSearch,
+                                    onShowMuseumSearch = { showMuseumSearch = true },
+                                    onSelectMuseum = { museum ->
+                                        selectedMuseum = museum
+                                        showMuseumSearch = false
+                                        viewModel.loadMuseumArtworks(museum)
+                                    },
+                                    onSelectMonument = { selectedMonument = it },
+                                    onListen = listenMonument,
+                                    onNavigate = navigateTo,
+                                    onMessage = notify
+                                )
+                            }
+                        }
+                    }
                     AppTab.BOOK -> BookContent(
                         viewModel = viewModel,
                         onSelectMonument = { selectedMonument = it },
@@ -779,25 +814,47 @@ private fun WalkQuizDialog(
 }
 
 /**
- * En-tête « X monuments trouvés » + boutons (tri, caméra, balade, liste/carte),
- * affiché au-dessus de la liste comme de la carte. Sur deux lignes pour que
- * tout reste visible sur les écrans étroits (les boutons défilent au besoin).
+ * En-tête de l'onglet Autour de moi : compteur et rayon, sélecteur Liste/Carte
+ * segmenté, puis les actions secondaires (caméra, tri, musées de la zone).
+ * Les balades ont leur bouton flottant.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AroundToolbar(
     count: Int,
+    radiusM: Int,
     sortByYear: Boolean,
     onToggleSort: () -> Unit,
     onOpenCamera: () -> Unit,
-    onShowWalk: () -> Unit,
+    onMuseumsHere: () -> Unit,
     showMap: Boolean,
     onToggleMap: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            "$count monuments trouvés",
-            style = MaterialTheme.typography.labelMedium
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "$count monuments · ${radiusM / 1000} km",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f)
+            )
+            SingleChoiceSegmentedButtonRow {
+                SegmentedButton(
+                    selected = !showMap,
+                    onClick = { if (showMap) onToggleMap() },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    label = { Text("Liste") }
+                )
+                SegmentedButton(
+                    selected = showMap,
+                    onClick = { if (!showMap) onToggleMap() },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    label = { Text("Carte") }
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -805,18 +862,13 @@ private fun AroundToolbar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Sélecteur de vue : l'état courant est visible, un tap bascule
-            FilterChip(
-                selected = !showMap,
-                onClick = { if (showMap) onToggleMap() },
-                label = { Text("📋 Liste") }
+            AssistChip(
+                onClick = onOpenCamera,
+                label = { Text("📷 Caméra") },
+                modifier = Modifier.semantics {
+                    contentDescription = "Ouvrir la caméra (mode AR, scanner QR, identification photo)"
+                }
             )
-            FilterChip(
-                selected = showMap,
-                onClick = { if (!showMap) onToggleMap() },
-                label = { Text("🗺️ Carte") }
-            )
-            // Libellés explicites : les emoji seuls cachaient les fonctions
             AssistChip(
                 onClick = onToggleSort,
                 label = { Text(if (sortByYear) "📅 Tri : année" else "📍 Tri : distance") },
@@ -828,14 +880,7 @@ private fun AroundToolbar(
                     }
                 }
             )
-            AssistChip(
-                onClick = onOpenCamera,
-                label = { Text("📷 Caméra") },
-                modifier = Modifier.semantics {
-                    contentDescription = "Ouvrir la caméra (mode AR, scanner QR, identification photo)"
-                }
-            )
-            AssistChip(onClick = onShowWalk, label = { Text("🥾 Balade") })
+            AssistChip(onClick = onMuseumsHere, label = { Text("🏛 Musées ici") })
         }
     }
 }
@@ -854,9 +899,11 @@ private fun AroundContent(
     onOpenMap: () -> Unit,
     onSelectMonument: (Monument) -> Unit,
     onLocate: () -> Unit,
+    onMuseumsHere: () -> Unit,
     onOpenCamera: () -> Unit
 ) {
     val context = LocalContext.current
+    val radiusM by viewModel.searchRadiusM.collectAsStateWithLifecycle()
     val lastMonuments by viewModel.lastMonuments.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     // Balade guidée active : son itinéraire s'affiche sur la carte même si
@@ -896,10 +943,11 @@ private fun AroundContent(
                             FilterBar(selected = filter, onSelect = { filter = it })
                             AroundToolbar(
                                 count = visible.size,
+                                radiusM = radiusM,
                                 sortByYear = sortByYear,
                                 onToggleSort = { sortByYear = !sortByYear },
                                 onOpenCamera = onOpenCamera,
-                                onShowWalk = { onShowWalkChange(true) },
+                                onMuseumsHere = onMuseumsHere,
                                 showMap = true,
                                 onToggleMap = onToggleMap
                             )
@@ -948,10 +996,11 @@ private fun AroundContent(
                         item {
                             AroundToolbar(
                                 count = visible.size,
+                                radiusM = radiusM,
                                 sortByYear = sortByYear,
                                 onToggleSort = { sortByYear = !sortByYear },
                                 onOpenCamera = onOpenCamera,
-                                onShowWalk = { onShowWalkChange(true) },
+                                onMuseumsHere = onMuseumsHere,
                                 showMap = false,
                                 onToggleMap = onToggleMap
                             )
@@ -1703,23 +1752,32 @@ private fun MonumentDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("") },
+                title = {
+                    Text(monument.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
                 navigationIcon = {
-                    TextButton(onClick = onClose) { Text("← Retour", color = Color.White) }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                    }
                 },
                 actions = {
-                    // Retour direct à l'accueil (onglet « Autour de moi »)
-                    TextButton(
-                        onClick = onHome,
-                        modifier = Modifier.semantics {
-                            contentDescription = "Retour à l'accueil"
+                    IconButton(onClick = {
+                        if (!shareMonument(context, monument)) {
+                            notify("Aucune application de partage disponible")
                         }
-                    ) { Text("🏠 Accueil", color = Color.White) }
+                    }) {
+                        Icon(Icons.Filled.Share, contentDescription = "Partager la fiche")
+                    }
+                    // Retour direct à l'accueil (onglet « Autour de moi »)
+                    IconButton(onClick = onHome) {
+                        Icon(Icons.Filled.Home, contentDescription = "Retour à l'accueil")
+                    }
                 },
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     navigationIconContentColor = Color.White,
-                    titleContentColor = Color.White
+                    titleContentColor = Color.White,
+                    actionIconContentColor = Color.White
                 )
             )
         },
@@ -1787,248 +1845,250 @@ private fun MonumentDetailScreen(
                 )
             }
             Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = monument.kind.replace('_', ' '),
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                monument.inception?.let {
+                // Faits clés en pastilles : type, date, style, classement
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SuggestionChip(
+                        onClick = {},
+                        label = { Text(monument.kind.replace('_', ' ')) }
+                    )
+                    monument.inception?.let {
+                        SuggestionChip(onClick = {}, label = { Text("📅 $it") })
+                    }
+                    monument.style?.let {
+                        SuggestionChip(onClick = {}, label = { Text("🏛 $it") })
+                    }
+                    monument.heritage?.let {
+                        SuggestionChip(
+                            onClick = {},
+                            label = {
+                                Text("🏅 $it" + (monument.heritageYear?.let { y -> " ($y)" } ?: ""))
+                            }
+                        )
+                    }
+                }
+                monument.artist?.let { artist ->
                     Text(
-                        text = if (monument.artist != null) "📅 $it" else "Construit en $it",
-                        style = MaterialTheme.typography.labelLarge
+                        text = "🎨 $artist",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 6.dp)
                     )
                 }
-            }
-            monument.artist?.let { artist ->
+
+                // Actions principales : y aller, écouter — puis favori, visité, note
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (!openMaps(context, monument)) {
+                                notify("Aucune application de cartes installée")
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("🧭 Itinéraire") }
+                    OutlinedButton(onClick = onListen, modifier = Modifier.weight(1f)) {
+                        Text("🔊 Écouter")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    TextButton(onClick = {
+                        viewModel.toggleFavorite(monument)
+                        notify(if (isFav) "Retiré des favoris" else "⭐ Ajouté aux favoris")
+                    }) {
+                        Icon(
+                            Icons.Filled.Star,
+                            contentDescription = null,
+                            tint = if (isFav) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Favori")
+                    }
+                    TextButton(onClick = {
+                        viewModel.toggleVisited(monument)
+                        notify(if (isVis) "Retiré des visités" else "✓ Marqué visité")
+                    }) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = if (isVis) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (isVis) "Visité" else "Visiter")
+                    }
+                    TextButton(onClick = { showNoteDialog = true }) {
+                        Text(if (note == null) "📝 Note" else "📝 Modifier")
+                    }
+                }
+                if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
+                    OutlinedButton(
+                        onClick = onViewWorks,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("🏛️ Voir les œuvres de ce musée") }
+                }
+
+                // Note personnelle du carnet
+                note?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "📝 Ta note",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                // À propos : description + article complet
+                SectionHeader("À propos")
                 Text(
-                    text = "🎨 $artist",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-            monument.architect?.let {
-                Text("👷 Architecte : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.style?.let {
-                Text("🏛 Style : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.material?.let {
-                Text("🧱 Matériau : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.heritage?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "🏅 $it" + (monument.heritageYear?.let { y -> " ($y)" } ?: ""),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            monument.openedYear?.takeIf { it != monument.inception }?.let {
-                Text("🎀 Ouverture : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.founder?.let {
-                Text("🏗 Fondé par : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.owner?.let {
-                Text("🏢 Propriétaire : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            (monument.address ?: monument.commune)?.let {
-                Text("📍 $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.namedAfter?.let {
-                Text("🏷 Nommé d'après : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            if (monument.events.isNotEmpty()) {
-                Text(
-                    "📜 " + monument.events.joinToString(" · "),
+                    text = monument.description ?: "Aucune description disponible.",
                     style = MaterialTheme.typography.bodyMedium
                 )
-            }
-            monument.openingHours?.let {
-                Text("🕒 Horaires : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.fee?.let {
-                Text("🎟 Entrée : $it", style = MaterialTheme.typography.bodyMedium)
-            }
-            monument.website?.let { url ->
-                TextButton(
-                    onClick = {
-                        if (!openWebsite(context, url)) notify("Aucun navigateur disponible")
-                    },
-                    modifier = Modifier.padding(top = 2.dp)
-                ) { Text("🌐 Site officiel") }
-            }
-            // Actions principales en tête de fiche (elles étaient enterrées
-            // sous la description et les photos) ; FlowRow : plus de boutons
-            // hors écran quand la police système est agrandie
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 10.dp)
-            ) {
-                Button(onClick = {
-                    if (!openMaps(context, monument)) {
-                        notify("Aucune application de cartes installée")
-                    }
-                }) { Text("🧭 Itinéraire") }
-                OutlinedButton(onClick = onListen) { Text("🔊 Écouter") }
-            }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 2.dp)
-            ) {
-                OutlinedButton(onClick = {
-                    viewModel.toggleFavorite(monument)
-                    notify(if (isFav) "Retiré des favoris" else "⭐ Ajouté aux favoris")
-                }) {
-                    Text(if (isFav) "★ Favori" else "☆ Favori")
-                }
-                OutlinedButton(onClick = {
-                    viewModel.toggleVisited(monument)
-                    notify(if (isVis) "Retiré des visités" else "✓ Marqué visité")
-                }) {
-                    Text(if (isVis) "✓ Visité" else "○ Visiter")
-                }
-                OutlinedButton(onClick = {
-                    if (!shareMonument(context, monument)) {
-                        notify("Aucune application de partage disponible")
-                    }
-                }) {
-                    Text("📤 Partager")
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = monument.description ?: "Aucune description disponible.",
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            // Note personnelle du carnet
-            note?.let {
-                Spacer(Modifier.height(10.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            "📝 Ta note",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(it, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            if (loadingImages && images.isEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                SearchRow()
-            } else if (images.isNotEmpty()) {
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    "Photos",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.height(6.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(images) { url ->
-                        AsyncImage(
-                            model = url,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(120.dp)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // Article Wikipédia complet : affiché à l'écran ET lisible à voix haute
-            if (!monument.wikipediaTitle.isNullOrBlank()) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = {
-                        val title = monument.wikipediaTitle
-                        if (title != null) {
-                            loadingArticle = true
-                            scope.launch {
-                                articleText = WikipediaClient.fetchFullText(title)
-                                    ?: "L'article complet n'est pas disponible pour le moment."
-                                loadingArticle = false
+                if (!monument.wikipediaTitle.isNullOrBlank()) {
+                    TextButton(
+                        onClick = {
+                            val title = monument.wikipediaTitle
+                            if (title != null) {
+                                loadingArticle = true
+                                scope.launch {
+                                    articleText = WikipediaClient.fetchFullText(title)
+                                        ?: "L'article complet n'est pas disponible pour le moment."
+                                    loadingArticle = false
+                                }
                             }
-                        }
-                    },
-                    enabled = !loadingArticle,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        if (loadingArticle) "Chargement de l'article…"
-                        else "📖 Lire l'article complet"
-                    )
+                        },
+                        enabled = !loadingArticle
+                    ) {
+                        Text(
+                            if (loadingArticle) "Chargement de l'article…"
+                            else "📖 Lire l'article complet"
+                        )
+                    }
                 }
-            }
 
-            Spacer(Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { showNoteDialog = true }) {
-                    Text(if (note == null) "📝 Ajouter une note" else "📝 Modifier la note")
-                }
-                if (!monument.wikidataId.isNullOrBlank()) {
-                    OutlinedButton(onClick = { showQrDialog = true }) { Text("🔳 QR") }
-                }
-            }
-
-            // Données liées : notices officielles et bases du web sémantique
-            val linked = buildList {
-                monument.merimeeRef?.let {
-                    add("🏛 Notice Mérimée" to "https://www.pop.culture.gouv.fr/notice/merimee/$it")
-                }
-                monument.museofileRef?.let {
-                    add("🖼 Notice Muséofile" to "https://www.pop.culture.gouv.fr/notice/museo/$it")
-                }
-                monument.wikidataId?.let {
-                    add("🌐 Wikidata" to "https://www.wikidata.org/wiki/$it")
-                }
-                monument.wikipediaTitle?.takeIf { it.isNotBlank() }?.let {
-                    add(
-                        "📖 Wikipédia" to
-                            "https://fr.wikipedia.org/wiki/${Uri.encode(it.replace(' ', '_'))}"
-                    )
-                }
-                monument.commonsCategory?.let {
-                    add(
-                        "🖼️ Commons" to
-                            "https://commons.wikimedia.org/wiki/Category:${Uri.encode(it.replace(' ', '_'))}"
-                    )
-                }
-            }
-            if (linked.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "🔗 Données liées",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
+                // Infos pratiques
+                val practical = listOfNotNull(
+                    (monument.address ?: monument.commune)?.let { "📍 $it" },
+                    monument.openingHours?.let { "🕒 Horaires : $it" },
+                    monument.fee?.let { "🎟 Entrée : $it" }
                 )
-                FlowRow {
-                    linked.forEach { (label, url) ->
+                if (practical.isNotEmpty() || monument.website != null) {
+                    SectionHeader("Infos pratiques")
+                    practical.forEach {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                    monument.website?.let { url ->
                         TextButton(onClick = {
                             if (!openWebsite(context, url)) notify("Aucun navigateur disponible")
-                        }) { Text(label) }
+                        }) { Text("🌐 Site officiel") }
+                    }
+                }
+
+                // Histoire & architecture
+                val history = listOfNotNull(
+                    monument.architect?.let { "👷 Architecte : $it" },
+                    monument.material?.let { "🧱 Matériau : $it" },
+                    monument.founder?.let { "🏗 Fondé par : $it" },
+                    monument.owner?.let { "🏢 Propriétaire : $it" },
+                    monument.namedAfter?.let { "🏷 Nommé d'après : $it" },
+                    monument.openedYear?.takeIf { it != monument.inception }
+                        ?.let { "🎀 Ouverture : $it" },
+                    monument.events.takeIf { it.isNotEmpty() }
+                        ?.let { "📜 " + it.joinToString(" · ") }
+                )
+                if (history.isNotEmpty()) {
+                    SectionHeader("Histoire & architecture")
+                    history.forEach {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+
+                // Photos
+                if (loadingImages && images.isEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    SearchRow()
+                } else if (images.isNotEmpty()) {
+                    SectionHeader("Photos")
+                    Spacer(Modifier.height(4.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(images) { url ->
+                            AsyncImage(
+                                model = url,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(120.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+
+                // Données liées : notices officielles, bases du web sémantique, QR
+                val linked = buildList {
+                    monument.merimeeRef?.let {
+                        add("🏛 Notice Mérimée" to "https://www.pop.culture.gouv.fr/notice/merimee/$it")
+                    }
+                    monument.museofileRef?.let {
+                        add("🖼 Notice Muséofile" to "https://www.pop.culture.gouv.fr/notice/museo/$it")
+                    }
+                    monument.wikidataId?.let {
+                        add("🌐 Wikidata" to "https://www.wikidata.org/wiki/$it")
+                    }
+                    monument.wikipediaTitle?.takeIf { it.isNotBlank() }?.let {
+                        add(
+                            "📖 Wikipédia" to
+                                "https://fr.wikipedia.org/wiki/${Uri.encode(it.replace(' ', '_'))}"
+                        )
+                    }
+                    monument.commonsCategory?.let {
+                        add(
+                            "🖼️ Commons" to
+                                "https://commons.wikimedia.org/wiki/Category:${Uri.encode(it.replace(' ', '_'))}"
+                        )
+                    }
+                }
+                if (linked.isNotEmpty() || !monument.wikidataId.isNullOrBlank()) {
+                    SectionHeader("🔗 Données liées")
+                    FlowRow {
+                        linked.forEach { (label, url) ->
+                            TextButton(onClick = {
+                                if (!openWebsite(context, url)) notify("Aucun navigateur disponible")
+                            }) { Text(label) }
+                        }
+                        if (!monument.wikidataId.isNullOrBlank()) {
+                            TextButton(onClick = { showQrDialog = true }) { Text("🔳 QR de la fiche") }
+                        }
                     }
                 }
             }
-
-            if (isMuseum && !monument.wikidataId.isNullOrBlank()) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onViewWorks,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("🏛️ Voir les œuvres de ce musée") }
-            }
-        }
         }
     }
 
