@@ -89,7 +89,10 @@ fun MonumentsMap(
                         position = GeoPoint(m.lat, m.lon)
                         title = m.name
                         snippet = m.description ?: m.kind.replace('_', ' ')
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        // La pointe de l'épingle est à 57 % de la hauteur du
+                        // dessin (pas en bas) : ancrer dessus pour que la
+                        // pointe tombe exactement sur le lieu.
+                        setAnchor(Marker.ANCHOR_CENTER, PIN_TIP_ANCHOR)
                         icon = context.getDrawable(pinForCategory(m.category()))
                         setOnMarkerClickListener { _, _ ->
                             onSelectMonument(m)
@@ -102,7 +105,12 @@ fun MonumentsMap(
             // Étiquettes de nom (au-dessus des marqueurs : elles reçoivent le
             // tap en premier, sans masquer les épingles)
             overlays.add(
-                LabelOverlay(monuments, resources.displayMetrics.density, onSelectMonument)
+                LabelOverlay(
+                    monuments = monuments,
+                    density = resources.displayMetrics.density,
+                    scaledDensity = resources.displayMetrics.scaledDensity,
+                    onTap = onSelectMonument
+                )
             )
         }
     }
@@ -170,76 +178,108 @@ private const val WALK_15MIN_M = 1200
 /** Zoom à partir duquel les noms des monuments sont affichés sur la carte. */
 private const val LABEL_MIN_ZOOM = 16.0
 
+/** Ancrage vertical de la pointe des épingles (y = 62 sur un viewport de 108). */
+private const val PIN_TIP_ANCHOR = 62f / 108f
+
+/** Demi-largeur et hauteur visibles de l'épingle (dp), pour éviter de la couvrir. */
+private const val PIN_HALF_WIDTH_DP = 9f
+private const val PIN_HEIGHT_DP = 21f
+
 /**
- * Étiquettes « nom du monument » dessinées à droite de chaque épingle quand la
- * carte est assez zoomée. Les monuments majeurs sont placés en premier ; une
- * étiquette qui chevaucherait une étiquette déjà posée n'est pas dessinée, pour
- * que le contenu reste lisible. Un tap sur une étiquette ouvre la fiche.
+ * Étiquettes « nom du monument » dessinées à côté de chaque épingle quand la
+ * carte est assez zoomée. Le texte suit la taille de police du téléphone.
+ * Chaque étiquette est posée à droite, à gauche, au-dessus ou en dessous de
+ * l'épingle, à la première place qui ne recouvre ni une autre étiquette ni une
+ * épingle ; sans place libre, elle n'est pas dessinée (monuments majeurs
+ * servis en premier). Un tap sur une étiquette ouvre la fiche.
  */
 private class LabelOverlay(
     monuments: List<Monument>,
     private val density: Float,
+    scaledDensity: Float,
     private val onTap: (Monument) -> Unit
 ) : Overlay() {
 
     private val ordered = monuments.sortedByDescending { it.important }
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 12f * density
+        textSize = 14f * scaledDensity // 14 sp : suit « Taille de police » du téléphone
         color = Color.rgb(26, 41, 72) // bleu nuit du thème
         typeface = Typeface.DEFAULT_BOLD
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(235, 255, 255, 255)
+        color = Color.WHITE
     }
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(201, 151, 43) // or du thème
         style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
+        strokeWidth = 2f * density
     }
-    private val padding = 5f * density
-    private val offsetX = 10f * density
-    private val maxTextWidth = 170f * density
-    private val corner = 6f * density
+    private val padding = 6f * density
+    private val gap = 3f * density
+    private val maxTextWidth = 200f * density
+    private val corner = 8f * density
+    private val pinHalfWidth = PIN_HALF_WIDTH_DP * density
+    private val pinHeight = PIN_HEIGHT_DP * density
     private val point = Point()
 
     /** Étiquettes posées lors du dernier dessin, pour le hit-test au tap. */
     private val placed = ArrayList<Pair<RectF, Monument>>()
+    private val pins = ArrayList<RectF>()
 
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
         placed.clear()
+        pins.clear()
         if (mapView.zoomLevelDouble < LABEL_MIN_ZOOM) return
 
         val projection = mapView.projection
-        val textHeight = textPaint.descent() - textPaint.ascent()
         val width = canvas.width.toFloat()
         val height = canvas.height.toFloat()
+        val textHeight = textPaint.descent() - textPaint.ascent()
+        val labelHeight = textHeight + 2 * padding
 
-        for (m in ordered) {
+        // Position écran de chaque épingle (la pointe est sur le lieu)
+        val anchors = ordered.map { m ->
             projection.toPixels(GeoPoint(m.lat, m.lon), point)
+            val x = point.x.toFloat()
+            val y = point.y.toFloat()
+            pins.add(RectF(x - pinHalfWidth, y - pinHeight, x + pinHalfWidth, y + gap))
+            x to y
+        }
+
+        ordered.forEachIndexed { index, m ->
+            val (x, y) = anchors[index]
+            if (x < -width || x > 2 * width || y < -height || y > 2 * height) return@forEachIndexed
             val label = TextUtils.ellipsize(
                 m.name, textPaint, maxTextWidth, TextUtils.TruncateAt.END
             ).toString()
-            if (label.isEmpty()) continue
-            val textWidth = textPaint.measureText(label)
-            // À droite de l'épingle, centré sur le milieu de l'icône (≈ 14 dp
-            // au-dessus de la pointe)
-            val centerY = point.y - 14f * density
-            val rect = RectF(
-                point.x + offsetX,
-                centerY - textHeight / 2 - padding,
-                point.x + offsetX + textWidth + 2 * padding,
-                centerY + textHeight / 2 + padding
+            if (label.isEmpty()) return@forEachIndexed
+            val labelWidth = textPaint.measureText(label) + 2 * padding
+            val pinCenterY = y - pinHeight / 2
+
+            // Candidats : droite, gauche, au-dessus, en dessous de l'épingle
+            val candidates = listOf(
+                RectF(x + pinHalfWidth + gap, pinCenterY - labelHeight / 2,
+                    x + pinHalfWidth + gap + labelWidth, pinCenterY + labelHeight / 2),
+                RectF(x - pinHalfWidth - gap - labelWidth, pinCenterY - labelHeight / 2,
+                    x - pinHalfWidth - gap, pinCenterY + labelHeight / 2),
+                RectF(x - labelWidth / 2, y - pinHeight - gap - labelHeight,
+                    x + labelWidth / 2, y - pinHeight - gap),
+                RectF(x - labelWidth / 2, y + gap * 2,
+                    x + labelWidth / 2, y + gap * 2 + labelHeight)
             )
-            if (rect.right < 0f || rect.left > width || rect.bottom < 0f || rect.top > height) continue
-            if (placed.any { RectF.intersects(it.first, rect) }) continue
+            val rect = candidates.firstOrNull { c ->
+                c.left >= 0f && c.right <= width && c.top >= 0f && c.bottom <= height &&
+                    placed.none { RectF.intersects(it.first, c) } &&
+                    pins.none { RectF.intersects(it, c) }
+            } ?: return@forEachIndexed
 
             canvas.drawRoundRect(rect, corner, corner, fillPaint)
             canvas.drawRoundRect(rect, corner, corner, strokePaint)
             canvas.drawText(
                 label,
                 rect.left + padding,
-                centerY - (textPaint.ascent() + textPaint.descent()) / 2,
+                rect.centerY() - (textPaint.ascent() + textPaint.descent()) / 2,
                 textPaint
             )
             placed.add(rect to m)
