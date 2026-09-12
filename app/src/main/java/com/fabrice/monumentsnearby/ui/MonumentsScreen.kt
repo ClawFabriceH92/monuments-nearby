@@ -2151,7 +2151,13 @@ private fun ArticleScreen(
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onClose) { Text("← Retour", color = Color.White) }
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Retour",
+                            tint = Color.White
+                        )
+                    }
                     Text(
                         monumentName,
                         style = MaterialTheme.typography.titleSmall,
