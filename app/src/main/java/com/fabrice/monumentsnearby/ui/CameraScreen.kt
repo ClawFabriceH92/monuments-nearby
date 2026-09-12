@@ -31,12 +31,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -70,6 +77,7 @@ import kotlin.math.sin
  * - AR : boussole (capteurs) + étiquette du monument visé (nom + distance)
  * - QR : scanner de QR codes — si le QR contient un QID Wikidata → fiche
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(
     monuments: List<Monument>,
@@ -191,10 +199,24 @@ fun CameraScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onClose) { Text("← Fermer") }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fermer la caméra")
+                }
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { qrMode = !qrMode }) {
-                    Text(if (qrMode) "📷 Mode AR" else "🔳 Mode QR")
+                // Mode courant visible d'un coup d'œil : viseur AR ou scanner QR
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+                    SegmentedButton(
+                        selected = !qrMode,
+                        onClick = { qrMode = false },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        label = { Text("📷 Viseur AR") }
+                    )
+                    SegmentedButton(
+                        selected = qrMode,
+                        onClick = { qrMode = true },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        label = { Text("🔳 Scanner QR") }
+                    )
                 }
             }
         }
