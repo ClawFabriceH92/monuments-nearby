@@ -355,6 +355,7 @@ fun MonumentsScreen(
         Scaffold(
             modifier = Modifier.auroraBackground(),
             containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
@@ -1796,6 +1797,7 @@ private fun MonumentDetailScreen(
     Scaffold(
         modifier = Modifier.auroraBackground(),
         containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
@@ -2189,7 +2191,8 @@ private fun ArticleScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .auroraBackground(),
-            color = Color.Transparent
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground
         ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
@@ -2379,7 +2382,8 @@ private fun SettingsDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .auroraBackground(),
-            color = Color.Transparent
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground
         ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
@@ -2722,7 +2726,8 @@ private fun MonumentCard(
         shape = RoundedCornerShape(22.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+            contentColor = MaterialTheme.colorScheme.onSurface
         ),
         // Bord « verre » : dégradé cyan → violet
         border = BorderStroke(

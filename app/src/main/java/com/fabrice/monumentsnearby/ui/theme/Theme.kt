@@ -17,7 +17,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -121,20 +120,13 @@ private val ShapesRound = Shapes(
 )
 
 /** Exo 2 (OFL) : police géométrique pour les titres et libellés. */
+// Police variable (axe wght) : l'overload stable de Font() applique la graisse
+// demandée via FontVariation.Settings(weight, style) par défaut.
 private val Exo2 = FontFamily(
     Font(R.font.exo2, FontWeight.Normal),
-    Font(
-        R.font.exo2, FontWeight.Medium,
-        variationSettings = FontVariation.Settings(FontVariation.weight(500))
-    ),
-    Font(
-        R.font.exo2, FontWeight.SemiBold,
-        variationSettings = FontVariation.Settings(FontVariation.weight(600))
-    ),
-    Font(
-        R.font.exo2, FontWeight.Bold,
-        variationSettings = FontVariation.Settings(FontVariation.weight(700))
-    )
+    Font(R.font.exo2, FontWeight.Medium),
+    Font(R.font.exo2, FontWeight.SemiBold),
+    Font(R.font.exo2, FontWeight.Bold)
 )
 
 private val AppTypography = Typography().let { base ->
