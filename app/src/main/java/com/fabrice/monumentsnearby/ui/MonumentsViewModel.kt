@@ -18,6 +18,9 @@ import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WalkQuiz
 import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.data.WikidataClient
+import com.fabrice.monumentsnearby.data.WikidataNearby
+import org.json.JSONArray
+import org.json.JSONObject
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.location.GeofenceHelper
 import com.fabrice.monumentsnearby.location.WalkTracker
@@ -76,6 +79,15 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
         settingsPrefs.edit().putString("themeMode", mode.key).apply()
+    }
+
+    /** Découverte Wikidata : complète « Autour de moi » avec les lieux absents d'OSM. */
+    private val _wikidataDiscovery = MutableStateFlow(settingsPrefs.getBoolean("wikidataDiscovery", true))
+    val wikidataDiscovery: StateFlow<Boolean> = _wikidataDiscovery
+
+    fun setWikidataDiscovery(enabled: Boolean) {
+        _wikidataDiscovery.value = enabled
+        settingsPrefs.edit().putBoolean("wikidataDiscovery", enabled).apply()
     }
 
     /** Visite guidée : lecture audio automatique à l'approche d'un monument. */
@@ -232,6 +244,36 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
             }
             if (result is UiState.Success) _lastMonuments.value = result
             _state.value = result
+            if (result is UiState.Success && _wikidataDiscovery.value && result.mode == AppMode.MONUMENTS) {
+                discoverMore(result)
+            }
+        }
+    }
+
+    /**
+     * Second temps : lieux patrimoniaux connus de Wikidata mais absents
+     * d'OpenStreetMap (art public, plaques, sites…). Les résultats Overpass
+     * sont affichés tout de suite ; les découvertes s'y ajoutent ensuite, si
+     * l'écran montre toujours le même résultat.
+     */
+    private fun discoverMore(base: UiState.Success) {
+        viewModelScope.launch {
+            val extra = try {
+                val known = base.monuments.mapNotNull { it.wikidataId }.toSet()
+                val found = WikidataNearby.discover(base.lat, base.lon, _searchRadiusM.value, known)
+                if (found.isEmpty()) emptyList() else WikipediaClient.enrich(WikidataClient.enrich(found))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (extra.isEmpty() || _state.value !== base) return@launch
+            val ids = base.monuments.map { it.id }.toSet()
+            val merged = (base.monuments + extra.filter { it.id !in ids }).sortedBy { it.distanceM }
+            val updated = base.copy(monuments = merged)
+            MonumentCache.save(getApplication<Application>(), merged, base.lat, base.lon, base.title)
+            _lastMonuments.value = updated
+            _state.value = updated
         }
     }
 
@@ -331,11 +373,50 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     fun loadCity(cityName: String) {
         _state.value = UiState.Loading
         viewModelScope.launch {
+            val city = try {
+                GeocoderClient.geocodeCity(cityName)
+            } catch (e: Exception) {
+                null
+            }
+            if (city == null) {
+                _state.value = UiState.Error(
+                    "Ville introuvable — vérifie le nom (ex: Paris, Asnières-sur-Seine)."
+                )
+            } else {
+                loadCityAt(city)
+            }
+        }
+    }
+
+    /** Villes récemment consultées (la plus récente en premier, 6 au plus). */
+    private val _recentCities = MutableStateFlow(loadRecentCities())
+    val recentCities: StateFlow<List<GeocoderClient.City>> = _recentCities
+
+    private fun loadRecentCities(): List<GeocoderClient.City> = try {
+        val arr = JSONArray(settingsPrefs.getString("recentCities", "[]"))
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            GeocoderClient.City(o.getString("name"), o.getDouble("lat"), o.getDouble("lon"))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun rememberCity(city: GeocoderClient.City) {
+        val list = (listOf(city) + _recentCities.value.filter { it.name != city.name }).take(6)
+        _recentCities.value = list
+        val arr = JSONArray()
+        list.forEach { c ->
+            arr.put(JSONObject().put("name", c.name).put("lat", c.lat).put("lon", c.lon))
+        }
+        settingsPrefs.edit().putString("recentCities", arr.toString()).apply()
+    }
+
+    /** Monuments d'une ville déjà géolocalisée (suggestion ou historique). */
+    fun loadCityAt(city: GeocoderClient.City) {
+        _state.value = UiState.Loading
+        viewModelScope.launch {
             _state.value = try {
-                val city = GeocoderClient.geocodeCity(cityName)
-                    ?: throw RuntimeException(
-                        "Ville introuvable — vérifie le nom (ex: Paris, Asnières-sur-Seine)."
-                    )
                 val raw = OverpassClient.fetchMonuments(city.lat, city.lon, radiusM = 6000)
                 var enriched = WikidataClient.enrich(raw)
                 enriched = WikipediaClient.enrich(enriched)
@@ -348,6 +429,7 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 MonumentCache.save(
                     getApplication<Application>(), enriched, city.lat, city.lon, "Ville : ${city.name}"
                 )
+                rememberCity(city)
                 UiState.Success(enriched, city.lat, city.lon, AppMode.CITY, "Ville : ${city.name}")
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")

@@ -106,6 +106,9 @@ import coil.compose.AsyncImage
 import com.fabrice.monumentsnearby.BuildConfig
 import com.fabrice.monumentsnearby.data.FavoriteEntry
 import com.fabrice.monumentsnearby.data.Monument
+import com.fabrice.monumentsnearby.data.PhotonClient
+import com.fabrice.monumentsnearby.data.GeocoderClient
+import kotlinx.coroutines.delay
 import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WalkQuiz
 import com.fabrice.monumentsnearby.data.WikidataClient
@@ -1088,8 +1091,17 @@ private fun AroundContent(
                         }
                     }
                 } else {
-                    val majors = sorted.filter { it.important }
-                    val others = sorted.filter { !it.important }
+                    // Créateur en vedette : l'architecte le plus présent dans
+                    // les résultats (au moins deux monuments), filtre en un tap
+                    var creatorFilter by rememberSaveable { mutableStateOf<String?>(null) }
+                    val featuredCreator = visible
+                        .filter { it.architect != null }
+                        .groupBy { it.architect!! }
+                        .filter { it.value.size >= 2 }
+                        .maxByOrNull { it.value.size }
+                    val creatorVisible = creatorFilter?.let { c -> sorted.filter { it.architect == c } } ?: sorted
+                    val majors = creatorVisible.filter { it.important }
+                    val others = creatorVisible.filter { !it.important }
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(12.dp),
@@ -1109,6 +1121,47 @@ private fun AroundContent(
                                 showMap = false,
                                 onToggleMap = onToggleMap
                             )
+                        }
+                        when {
+                            creatorFilter != null -> item {
+                                AssistChip(
+                                    onClick = { creatorFilter = null },
+                                    label = { Text("🎨 $creatorFilter · ${creatorVisible.size} — ✕ tout afficher") }
+                                )
+                            }
+                            featuredCreator != null -> item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                ) {
+                                    Row(
+                                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                "🎨 Créateur en vedette",
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                            Text(
+                                                featuredCreator.key,
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            Text(
+                                                "${featuredCreator.value.size} monuments à proximité",
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        }
+                                        TextButton(onClick = { creatorFilter = featuredCreator.key }) {
+                                            Text("Voir")
+                                        }
+                                    }
+                                }
+                            }
                         }
                         if (visible.isEmpty() && filter != null) {
                             // Filtre sans résultat : proposer la sortie plutôt
@@ -1530,6 +1583,22 @@ private fun CityContent(
     var cityQuery by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf<String?>(null) }
     val cityGuide by viewModel.cityGuide.collectAsStateWithLifecycle()
+    val recentCities by viewModel.recentCities.collectAsStateWithLifecycle()
+    // Suggestions pendant la frappe (Photon), avec un léger délai anti-rafale
+    var suggestions by remember { mutableStateOf<List<PhotonClient.Suggestion>>(emptyList()) }
+    var suggestionsFor by remember { mutableStateOf("") }
+    LaunchedEffect(cityQuery) {
+        if (cityQuery.trim().length < 2 || cityQuery.trim() == suggestionsFor) {
+            if (cityQuery.trim().length < 2) suggestions = emptyList()
+            return@LaunchedEffect
+        }
+        delay(350)
+        suggestions = try {
+            PhotonClient.suggestCities(cityQuery.trim())
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1571,12 +1640,58 @@ private fun CityContent(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        if (suggestions.isNotEmpty()) {
+            items(suggestions, key = { "sug_${it.label}" }) { suggestion ->
+                Text(
+                    "📍 ${suggestion.label}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            suggestionsFor = suggestion.name
+                            cityQuery = suggestion.name
+                            suggestions = emptyList()
+                            viewModel.loadCityAt(
+                                GeocoderClient.City(suggestion.name, suggestion.lat, suggestion.lon)
+                            )
+                        }
+                        .padding(vertical = 8.dp)
+                )
+            }
+        }
         item {
             Button(
                 onClick = { viewModel.loadCity(cityQuery.trim()) },
                 enabled = cityQuery.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Afficher") }
+        }
+        if (recentCities.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Récentes :",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    recentCities.forEach { city ->
+                        AssistChip(
+                            onClick = {
+                                suggestionsFor = city.name
+                                cityQuery = city.name
+                                viewModel.loadCityAt(city)
+                            },
+                            label = { Text("🕘 ${city.name}") }
+                        )
+                    }
+                }
+            }
         }
 
         when (state) {
@@ -1884,6 +1999,7 @@ private fun MonumentDetailScreen(
         scope.launch { snackbarHostState.showSnackbar(msg) }
     }
     LaunchedEffect(monument.id) { viewModel.loadMonumentImages(monument) }
+    var selectedPhoto by remember { mutableStateOf<String?>(null) }
 
     val isMuseum = monument.kind.lowercase().contains("musée") ||
             monument.kind.lowercase().contains("museum")
@@ -2191,10 +2307,11 @@ private fun MonumentDetailScreen(
                         items(images) { url ->
                             AsyncImage(
                                 model = url,
-                                contentDescription = null,
+                                contentDescription = "Agrandir la photo",
                                 modifier = Modifier
                                     .size(120.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { selectedPhoto = url },
                                 contentScale = ContentScale.Crop
                             )
                         }
@@ -2269,6 +2386,15 @@ private fun MonumentDetailScreen(
             text = text,
             onListen = { onListenText(text) },
             onClose = { articleText = null }
+        )
+    }
+    selectedPhoto?.let { url ->
+        PhotoDialog(
+            url = url,
+            onDismiss = { selectedPhoto = null },
+            onOpenUrl = { link ->
+                if (!openWebsite(context, link)) notify("Aucun navigateur disponible")
+            }
         )
     }
 }
@@ -2610,6 +2736,22 @@ private fun SettingsDialog(
                     Switch(
                         checked = guidedVisit,
                         onCheckedChange = { viewModel.setGuidedVisit(it) }
+                    )
+                }
+                val wikidataDiscovery by viewModel.wikidataDiscovery.collectAsStateWithLifecycle()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Compléter avec Wikidata", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Après la recherche « Autour de moi », ajoute les lieux connus de " +
+                                "Wikidata mais absents d'OpenStreetMap : art public, plaques, sites.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = wikidataDiscovery,
+                        onCheckedChange = { viewModel.setWikidataDiscovery(it) }
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
