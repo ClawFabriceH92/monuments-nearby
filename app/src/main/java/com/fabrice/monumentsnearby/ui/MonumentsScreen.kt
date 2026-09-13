@@ -177,7 +177,10 @@ fun MonumentsScreen(
     val listenMonument: (Monument) -> Unit = { m ->
         speakerActive.value = true
         speakingTitle.value = m.name
-        speaker.speak(guideText(m))
+        speaker.speak(guideText(m), key = "guide:${m.id}")
+        if (speaker.resumedFromPhrase > 0) {
+            notify("▶ Reprise là où tu t'étais arrêté (${speaker.resumedFromPhrase + 1}/${speaker.phraseCount})")
+        }
     }
     var selectedMuseum by remember { mutableStateOf<WikidataClient.Museum?>(null) }
     var showMuseumSearch by rememberSaveable { mutableStateOf(true) }
@@ -236,6 +239,11 @@ fun MonumentsScreen(
                 append("Étape ${arrival.stepIndex + 1} sur ${arrival.totalSteps} : ")
                 append("${arrival.monument.name}. ")
                 append(arrival.monument.description ?: "Regarde autour de toi !")
+                // Enchaînement : les faits marquants de la fiche, sans relancer
+                // une lecture séparée
+                arrival.monument.architect?.let { append(" Architecte : $it.") }
+                arrival.monument.inception?.let { append(" Construit en $it.") }
+                arrival.monument.style?.let { append(" Style $it.") }
                 when {
                     arrival.lastStep -> {
                         append(" C'était la dernière étape. Belle balade !")
@@ -288,7 +296,10 @@ fun MonumentsScreen(
     val listenText: (String) -> Unit = { text ->
         speakerActive.value = true
         speakingTitle.value = selectedMonument?.name
-        speaker.speak(text)
+        speaker.speak(text, key = "article:${selectedMonument?.id ?: text.hashCode()}")
+        if (speaker.resumedFromPhrase > 0) {
+            notify("▶ Reprise là où tu t'étais arrêté (${speaker.resumedFromPhrase + 1}/${speaker.phraseCount})")
+        }
     }
 
     if (selectedMonument != null) {
@@ -421,16 +432,25 @@ fun MonumentsScreen(
                                         .padding(horizontal = 16.dp, vertical = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        "🥾 ${walk.nextIndex + 1}/${walk.stops.size} · " +
-                                            nextStop.monument.name +
-                                            (walk.distanceToNextM
-                                                ?.let { " — ${formatDistance(it)}" } ?: ""),
-                                        style = MaterialTheme.typography.labelLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f)
-                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            "🥾 ${walk.nextIndex + 1}/${walk.stops.size} · " +
+                                                nextStop.monument.name +
+                                                (walk.distanceToNextM
+                                                    ?.let { " — ${formatDistance(it)}" } ?: ""),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            "${formatDistance(walk.distanceM)} parcourus · " +
+                                                "${walk.elapsedMin} min · ${walk.reached} étape(s) atteinte(s)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                     TextButton(
                                         onClick = { viewModel.stopGuidedWalk() },
                                         modifier = Modifier.semantics {
@@ -632,7 +652,8 @@ fun MonumentsScreen(
     walkQuizQuestions?.let { questions ->
         WalkQuizDialog(
             questions = questions,
-            onDismiss = { viewModel.consumeWalkQuiz() }
+            onDismiss = { viewModel.consumeWalkQuiz() },
+            onFinished = { score, total -> viewModel.recordQuizScore(score, total) }
         )
     }
 
@@ -777,12 +798,16 @@ private fun FilterBar(selected: String?, onSelect: (String?) -> Unit) {
 @Composable
 private fun WalkQuizDialog(
     questions: List<WalkQuiz.Question>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onFinished: (score: Int, total: Int) -> Unit = { _, _ -> }
 ) {
     var index by remember { mutableStateOf(0) }
     var score by remember { mutableStateOf(0) }
     var answered by remember { mutableStateOf<Int?>(null) }
     val finished = index >= questions.size
+    LaunchedEffect(finished) {
+        if (finished) onFinished(score, questions.size)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (finished) "🎓 Résultat" else "🎓 Quiz de la balade") },
@@ -1166,9 +1191,9 @@ private fun AroundContent(
                 onShowWalkChange(false)
                 onOpenMap()
             },
-            onStartGuided = { stops ->
-                if (viewModel.startGuidedWalk(stops)) {
-                    walkStops = stops
+            onStartGuided = { walk ->
+                if (viewModel.startGuidedWalk(walk.stops, walk.title)) {
+                    walkStops = walk.stops
                     onShowWalkChange(false)
                     onOpenMap()
                     onMessage("🥾 Balade guidée lancée — je te parle à chaque étape")
@@ -1196,7 +1221,7 @@ private fun WalkDialog(
     onDismiss: () -> Unit,
     onNavigate: (Monument) -> Unit,
     onShowOnMap: (List<MonumentsViewModel.WalkStop>) -> Unit,
-    onStartGuided: (List<MonumentsViewModel.WalkStop>) -> Unit,
+    onStartGuided: (MonumentsViewModel.ThemedWalk) -> Unit,
     onOpenCircuit: (List<MonumentsViewModel.WalkStop>) -> Unit
 ) {
     val context = LocalContext.current
@@ -1283,7 +1308,7 @@ private fun WalkDialog(
                 Row {
                     TextButton(onClick = { onShowOnMap(walk.stops) }) { Text("🗺️ Carte") }
                     // Balade guidée : suivi GPS + lecture audio à chaque étape
-                    TextButton(onClick = { onStartGuided(walk.stops) }) { Text("▶ Guidée") }
+                    TextButton(onClick = { onStartGuided(walk) }) { Text("▶ Guidée") }
                 }
             }
         },
@@ -1620,6 +1645,7 @@ private fun BookContent(
 ) {
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val visited by viewModel.visited.collectAsStateWithLifecycle()
+    val walks by viewModel.walks.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     LazyColumn(
@@ -1627,13 +1653,54 @@ private fun BookContent(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        if (favorites.isEmpty() && visited.isEmpty()) {
+        if (favorites.isEmpty() && visited.isEmpty() && walks.isEmpty()) {
             item {
                 CenteredMessage(
-                    "Ton carnet est vide.\nMarque un monument ★ favori ou ✓ visité depuis sa fiche."
+                    "Ton carnet est vide.\nMarque un monument ★ favori ou ✓ visité depuis sa fiche, " +
+                        "ou lance une balade guidée."
                 ) {}
             }
             return@LazyColumn
+        }
+        if (walks.isNotEmpty()) {
+            item { SectionHeader("🥾 Balades (${walks.size})") }
+            item {
+                // Totaux : distance, temps, étapes
+                val totalKm = walks.sumOf { it.distanceM } / 1000.0
+                val totalMin = walks.sumOf { it.durationMin }
+                val totalStops = walks.sumOf { it.stopsReached }
+                Text(
+                    "%.1f km · %d min · %d étapes atteintes au total"
+                        .format(Locale.FRANCE, totalKm, totalMin, totalStops),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            items(walks.take(10), key = { "walk_${it.startedAt}" }) { walk ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            (if (walk.completed) "✅ " else "⏹ ") + walk.title,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            formatDate(walk.startedAt) + " · " +
+                                "${formatDistance(walk.distanceM)} · ${walk.durationMin} min · " +
+                                "${walk.stopsReached}/${walk.stops} étapes" +
+                                (walk.quizScore?.let { " · quiz $it/${walk.quizTotal}" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
         item {
             Row(
@@ -2702,7 +2769,9 @@ private fun SettingsDialog(
                                     }
                                 )
                                 Text(
-                                    voice.locale,
+                                    voice.locale +
+                                        (if (voice.quality >= 400) " · HD" else "") +
+                                        (if (voice.network) " · réseau" else ""),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

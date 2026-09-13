@@ -442,8 +442,17 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
         val distanceToNextM: Double? = null,
         /** Dernière position connue du marcheur (suivi GPS). */
         val lat: Double? = null,
-        val lon: Double? = null
-    )
+        val lon: Double? = null,
+        /** Titre de la balade (pour le carnet). */
+        val title: String = "Balade",
+        val startedAt: Long = System.currentTimeMillis(),
+        /** Distance parcourue depuis le départ (m), cumulée sur les relevés GPS. */
+        val distanceM: Double = 0.0,
+        /** Étapes atteintes. */
+        val reached: Int = 0
+    ) {
+        val elapsedMin: Long get() = ((System.currentTimeMillis() - startedAt) / 60_000L).coerceAtLeast(0)
+    }
 
     /** Étape atteinte — consommée par l'UI qui lance la lecture audio. */
     data class WalkArrival(
@@ -478,28 +487,64 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
      * l'arrivée à moins de [WALK_ARRIVAL_M] d'une étape émet [walkArrival].
      * Retourne false si la localisation précise n'est pas disponible.
      */
-    fun startGuidedWalk(stops: List<WalkStop>): Boolean {
+    fun startGuidedWalk(stops: List<WalkStop>, title: String = "Balade"): Boolean {
         if (stops.isEmpty()) return false
         val started = walkTracker.start { lat, lon -> onWalkLocation(lat, lon) }
         if (started) {
             _walkArrival.value = null
-            _guidedWalk.value = GuidedWalk(stops, nextIndex = 0)
+            _guidedWalk.value = GuidedWalk(stops, nextIndex = 0, title = title)
         }
         return started
     }
 
+    /** Arrêt manuel : la balade est consignée au carnet si elle a réellement commencé. */
     fun stopGuidedWalk() {
         walkTracker.stop()
+        _guidedWalk.value?.let { recordWalk(it) }
         _guidedWalk.value = null
         _walkArrival.value = null
     }
 
+    /** Balades consignées (la plus récente en premier). */
+    private val _walks = MutableStateFlow(repository.walks())
+    val walks: StateFlow<List<VisitRepository.WalkRecord>> = _walks
+
+    private fun recordWalk(walk: GuidedWalk) {
+        if (walk.reached == 0 && walk.distanceM < 100.0) return // pas vraiment partie
+        _walks.value = repository.addWalk(
+            VisitRepository.WalkRecord(
+                title = walk.title,
+                startedAt = walk.startedAt,
+                endedAt = System.currentTimeMillis(),
+                distanceM = walk.distanceM,
+                stops = walk.stops.size,
+                stopsReached = walk.reached
+            )
+        )
+    }
+
+    /** Score du quiz de fin, attaché à la dernière balade consignée. */
+    fun recordQuizScore(score: Int, total: Int) {
+        if (total <= 0) return
+        _walks.value = repository.setLastWalkQuiz(score, total)
+    }
+
     private fun onWalkLocation(lat: Double, lon: Double) {
-        val walk = _guidedWalk.value ?: return
+        val walk0 = _guidedWalk.value ?: return
+        // Distance parcourue : pas entre deux relevés, en ignorant les sauts
+        // GPS aberrants (> 300 m entre deux relevés rapprochés)
+        val step = if (walk0.lat != null && walk0.lon != null) {
+            haversineM(walk0.lat, walk0.lon, lat, lon).takeIf { it < 300.0 } ?: 0.0
+        } else {
+            0.0
+        }
+        val walk = walk0.copy(distanceM = walk0.distanceM + step)
         val stop = walk.stops.getOrNull(walk.nextIndex) ?: return
         val distance = haversineM(lat, lon, stop.monument.lat, stop.monument.lon)
+        walkTracker.setDistanceHint(distance)
         if (distance <= WALK_ARRIVAL_M) {
             val last = walk.nextIndex == walk.stops.lastIndex
+            val reached = walk.copy(reached = walk.reached + 1, lat = lat, lon = lon)
             if (last) {
                 // Fin de balade : on coupe le suivi, l'UI lit la dernière étape
                 // puis propose le quiz (posé AVANT walkArrival pour que la
@@ -507,13 +552,12 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 _walkQuiz.value = WalkQuiz.build(walk.stops.map { it.monument })
                     .takeIf { it.isNotEmpty() }
                 walkTracker.stop()
+                recordWalk(reached)
                 _guidedWalk.value = null
             } else {
-                _guidedWalk.value = walk.copy(
+                _guidedWalk.value = reached.copy(
                     nextIndex = walk.nextIndex + 1,
-                    distanceToNextM = null,
-                    lat = lat,
-                    lon = lon
+                    distanceToNextM = null
                 )
             }
             _walkArrival.value = WalkArrival(
