@@ -227,8 +227,13 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Monuments autour de la position GPS (mode MONUMENTS). */
+    /** Instant de la dernière détection de position (« mis à jour il y a… »). */
+    private val _lastLocatedAt = MutableStateFlow<Long?>(null)
+    val lastLocatedAt: StateFlow<Long?> = _lastLocatedAt
+
     fun load(lat: Double, lon: Double) {
         _state.value = UiState.Loading
+        _lastLocatedAt.value = System.currentTimeMillis()
         viewModelScope.launch {
             val result = try {
                 val raw = OverpassClient.fetchMonuments(lat, lon, radiusM = _searchRadiusM.value)
