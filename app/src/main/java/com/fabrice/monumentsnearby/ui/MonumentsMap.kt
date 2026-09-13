@@ -162,7 +162,7 @@ fun MonumentsMap(
     // Poignée de pilotage (recentrage) liée à la vue courante
     DisposableEffect(mapView, mapHandle) {
         mapHandle?.mapView = mapView
-        onDispose { if (mapHandle?.mapView === mapView) mapHandle.mapView = null }
+        onDispose { if (mapHandle != null && mapHandle.mapView === mapView) mapHandle.mapView = null }
     }
 
     // Position courante en balade guidée : le repère suit la marche
