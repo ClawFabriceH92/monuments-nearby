@@ -9,7 +9,11 @@ import java.util.Locale
 /** Une voix TTS disponible sur l'appareil. */
 data class TtsVoice(
     val name: String,
-    val locale: String
+    val locale: String,
+    /** Qualité déclarée par le moteur (Voice.QUALITY_*), 0 si inconnue. */
+    val quality: Int = 0,
+    /** Voix nécessitant le réseau (souvent les plus naturelles). */
+    val network: Boolean = false
 )
 
 /**
@@ -18,6 +22,9 @@ data class TtsVoice(
  * - Voix sélectionnable (voix système), choix persisté en SharedPreferences.
  * - Pause/reprise : le texte est découpé en phrases ; la pause coupe à la fin
  *   de la phrase en cours, la reprise continue à la phrase suivante.
+ * - Mémoire de lecture : une lecture arrêtée en cours de route reprend à la
+ *   même phrase quand on relance le même texte (clé [speak] `key`).
+ * - Sans voix choisie, la meilleure voix française hors ligne est retenue.
  */
 class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
 
@@ -49,11 +56,45 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
     /** Appelé quand la lecture se termine (ou est annulée) — pour resynchroniser l'UI. */
     var onFinished: (() -> Unit)? = null
 
-    /** Voix disponibles, françaises en premier. */
+    /** Clé du texte en cours (monument, article…) pour la mémoire de lecture. */
+    private var currentKey: String? = null
+
+    /** Position mémorisée par clé : index de la phrase où reprendre. */
+    private val progress = HashMap<String, Int>()
+
+    /** Phrase de reprise de la dernière lecture lancée (0 = depuis le début). */
+    var resumedFromPhrase: Int = 0
+        private set
+
+    /** Nombre de phrases de la lecture en cours. */
+    val phraseCount: Int get() = phrases.size
+
+    /** Voix disponibles : françaises d'abord, puis par qualité décroissante. */
     val voices: List<TtsVoice>
         get() = (tts.voices ?: emptySet())
-            .sortedWith(compareByDescending<Voice> { it.locale.language == "fr" }.thenBy { it.name })
-            .map { TtsVoice(name = it.name, locale = it.locale.toLanguageTag()) }
+            .sortedWith(
+                compareByDescending<Voice> { it.locale.language == "fr" }
+                    .thenByDescending { it.quality }
+                    .thenBy { it.name }
+            )
+            .map {
+                TtsVoice(
+                    name = it.name,
+                    locale = it.locale.toLanguageTag(),
+                    quality = it.quality,
+                    network = it.isNetworkConnectionRequired
+                )
+            }
+
+    /**
+     * Sans choix explicite, retient la voix française hors ligne de meilleure
+     * qualité (les moteurs récents en proposent plusieurs, la voix par défaut
+     * n'est pas toujours la plus naturelle).
+     */
+    private fun pickBestFrenchVoice(): Voice? =
+        (tts.voices ?: emptySet())
+            .filter { it.locale.language == "fr" && !it.isNetworkConnectionRequired }
+            .maxByOrNull { it.quality }
 
     override fun onInit(status: Int) {
         ready = status == TextToSpeech.SUCCESS
@@ -77,7 +118,7 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
                     playNext()
                 }
             })
-            pending?.let { speak(it) }
+            pending?.let { speak(it, pendingKey) }
             pending = null
         }
     }
@@ -100,22 +141,51 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
     }
 
     private fun applySelectedVoice() {
-        val name = selectedVoiceName ?: return
-        tts.voices?.firstOrNull { it.name == name }?.let { tts.setVoice(it) }
+        val name = selectedVoiceName
+        val voice = if (name != null) {
+            tts.voices?.firstOrNull { it.name == name }
+        } else {
+            pickBestFrenchVoice()
+        }
+        voice?.let { tts.setVoice(it) }
     }
 
-    /** Lit un texte, découpé en phrases pour permettre la pause/reprise. */
-    fun speak(text: String) {
+    /**
+     * Lit un texte, découpé en phrases pour permettre la pause/reprise.
+     * Avec une [key], une lecture précédente du même texte arrêtée en cours de
+     * route reprend à la phrase mémorisée ([resumedFromPhrase] > 0).
+     */
+    fun speak(text: String, key: String? = null) {
         if (!ready) {
             pending = text
+            pendingKey = key
             return
         }
+        rememberProgress()
         phrases.clear()
         phrases.addAll(splitPhrases(text))
-        phraseIndex = 0
+        currentKey = key
+        val resumeAt = key?.let { progress[it] }?.takeIf { it in 1 until phrases.size } ?: 0
+        resumedFromPhrase = resumeAt
+        phraseIndex = resumeAt
         paused = false
         isPaused = false
         playNext()
+    }
+
+    private var pendingKey: String? = null
+
+    /** Mémorise où en est la lecture en cours (pour une reprise ultérieure). */
+    private fun rememberProgress() {
+        val key = currentKey ?: return
+        // phraseIndex pointe sur la phrase suivante : la phrase en cours est
+        // reprise si on s'est arrêté au milieu
+        val at = (phraseIndex - 1).coerceAtLeast(0)
+        if (phrases.isNotEmpty() && at in 1 until phrases.size) {
+            progress[key] = at
+        } else {
+            progress.remove(key)
+        }
     }
 
     /** Pause : coupe à la fin de la phrase en cours. */
@@ -141,10 +211,12 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun stop() {
+        rememberProgress()
         paused = false
         isPaused = false
         phraseIndex = phrases.size
         phrases.clear()
+        currentKey = null
         tts.stop()
         onFinished?.invoke() // permet à l'UI de cacher la barre de lecture
     }
@@ -168,7 +240,9 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
             tts.speak(phrases[phraseIndex], TextToSpeech.QUEUE_FLUSH, null, "guide_$phraseIndex")
             phraseIndex++
         } else {
-            // Fin de lecture
+            // Fin de lecture : plus rien à reprendre pour ce texte
+            currentKey?.let { progress.remove(it) }
+            currentKey = null
             paused = false
             isPaused = false
             onFinished?.invoke()

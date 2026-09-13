@@ -117,6 +117,84 @@ class VisitRepository(context: Context) {
         return map
     }
 
+    /** Une balade guidée terminée ou interrompue, pour le tableau de bord du carnet. */
+    data class WalkRecord(
+        val title: String,
+        val startedAt: Long,
+        val endedAt: Long,
+        val distanceM: Double,
+        val stops: Int,
+        val stopsReached: Int,
+        val quizScore: Int? = null,
+        val quizTotal: Int? = null
+    ) {
+        val durationMin: Long get() = ((endedAt - startedAt) / 60_000L).coerceAtLeast(0)
+        val completed: Boolean get() = stops > 0 && stopsReached >= stops
+    }
+
+    /** Balades enregistrées, la plus récente en premier. */
+    fun walks(): List<WalkRecord> {
+        val raw = prefs.getString("walks", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                WalkRecord(
+                    title = o.optString("title"),
+                    startedAt = o.optLong("startedAt"),
+                    endedAt = o.optLong("endedAt"),
+                    distanceM = o.optDouble("distanceM", 0.0),
+                    stops = o.optInt("stops"),
+                    stopsReached = o.optInt("stopsReached"),
+                    quizScore = if (o.has("quizScore")) o.optInt("quizScore") else null,
+                    quizTotal = if (o.has("quizTotal")) o.optInt("quizTotal") else null
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Ajoute une balade en tête (au plus [MAX_WALKS] conservées). Retourne la liste à jour. */
+    fun addWalk(record: WalkRecord): List<WalkRecord> {
+        val list = (listOf(record) + walks()).take(MAX_WALKS)
+        saveWalks(list)
+        return list
+    }
+
+    /** Attache le score du quiz à la balade la plus récente. Retourne la liste à jour. */
+    fun setLastWalkQuiz(score: Int, total: Int): List<WalkRecord> {
+        val list = walks().toMutableList()
+        if (list.isEmpty()) return list
+        list[0] = list[0].copy(quizScore = score, quizTotal = total)
+        saveWalks(list)
+        return list
+    }
+
+    private fun saveWalks(list: List<WalkRecord>) {
+        val arr = JSONArray()
+        list.forEach { w ->
+            arr.put(
+                JSONObject()
+                    .put("title", w.title)
+                    .put("startedAt", w.startedAt)
+                    .put("endedAt", w.endedAt)
+                    .put("distanceM", w.distanceM)
+                    .put("stops", w.stops)
+                    .put("stopsReached", w.stopsReached)
+                    .apply {
+                        if (w.quizScore != null) put("quizScore", w.quizScore)
+                        if (w.quizTotal != null) put("quizTotal", w.quizTotal)
+                    }
+            )
+        }
+        prefs.edit().putString("walks", arr.toString()).apply()
+    }
+
+    private companion object {
+        const val MAX_WALKS = 50
+    }
+
     /** Notes personnelles : id → note. */
     fun notes(): Map<String, String> {
         val raw = prefs.getString("notes", null) ?: return emptyMap()
