@@ -13,10 +13,14 @@ import com.fabrice.monumentsnearby.data.GeocoderClient
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.MonumentCache
 import com.fabrice.monumentsnearby.data.OverpassClient
+import com.fabrice.monumentsnearby.data.RouteClient
 import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WalkQuiz
 import com.fabrice.monumentsnearby.data.category
 import com.fabrice.monumentsnearby.data.WikidataClient
+import com.fabrice.monumentsnearby.data.WikidataNearby
+import org.json.JSONArray
+import org.json.JSONObject
 import com.fabrice.monumentsnearby.data.WikipediaClient
 import com.fabrice.monumentsnearby.location.GeofenceHelper
 import com.fabrice.monumentsnearby.location.WalkTracker
@@ -75,6 +79,15 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
         settingsPrefs.edit().putString("themeMode", mode.key).apply()
+    }
+
+    /** Découverte Wikidata : complète « Autour de moi » avec les lieux absents d'OSM. */
+    private val _wikidataDiscovery = MutableStateFlow(settingsPrefs.getBoolean("wikidataDiscovery", true))
+    val wikidataDiscovery: StateFlow<Boolean> = _wikidataDiscovery
+
+    fun setWikidataDiscovery(enabled: Boolean) {
+        _wikidataDiscovery.value = enabled
+        settingsPrefs.edit().putBoolean("wikidataDiscovery", enabled).apply()
     }
 
     /** Visite guidée : lecture audio automatique à l'approche d'un monument. */
@@ -214,8 +227,13 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Monuments autour de la position GPS (mode MONUMENTS). */
+    /** Instant de la dernière détection de position (« mis à jour il y a… »). */
+    private val _lastLocatedAt = MutableStateFlow<Long?>(null)
+    val lastLocatedAt: StateFlow<Long?> = _lastLocatedAt
+
     fun load(lat: Double, lon: Double) {
         _state.value = UiState.Loading
+        _lastLocatedAt.value = System.currentTimeMillis()
         viewModelScope.launch {
             val result = try {
                 val raw = OverpassClient.fetchMonuments(lat, lon, radiusM = _searchRadiusM.value)
@@ -231,6 +249,36 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
             }
             if (result is UiState.Success) _lastMonuments.value = result
             _state.value = result
+            if (result is UiState.Success && _wikidataDiscovery.value && result.mode == AppMode.MONUMENTS) {
+                discoverMore(result)
+            }
+        }
+    }
+
+    /**
+     * Second temps : lieux patrimoniaux connus de Wikidata mais absents
+     * d'OpenStreetMap (art public, plaques, sites…). Les résultats Overpass
+     * sont affichés tout de suite ; les découvertes s'y ajoutent ensuite, si
+     * l'écran montre toujours le même résultat.
+     */
+    private fun discoverMore(base: UiState.Success) {
+        viewModelScope.launch {
+            val extra = try {
+                val known = base.monuments.mapNotNull { it.wikidataId }.toSet()
+                val found = WikidataNearby.discover(base.lat, base.lon, _searchRadiusM.value, known)
+                if (found.isEmpty()) emptyList() else WikipediaClient.enrich(WikidataClient.enrich(found))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (extra.isEmpty() || _state.value !== base) return@launch
+            val ids = base.monuments.map { it.id }.toSet()
+            val merged = (base.monuments + extra.filter { it.id !in ids }).sortedBy { it.distanceM }
+            val updated = base.copy(monuments = merged)
+            MonumentCache.save(getApplication<Application>(), merged, base.lat, base.lon, base.title)
+            _lastMonuments.value = updated
+            _state.value = updated
         }
     }
 
@@ -330,11 +378,50 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     fun loadCity(cityName: String) {
         _state.value = UiState.Loading
         viewModelScope.launch {
+            val city = try {
+                GeocoderClient.geocodeCity(cityName)
+            } catch (e: Exception) {
+                null
+            }
+            if (city == null) {
+                _state.value = UiState.Error(
+                    "Ville introuvable — vérifie le nom (ex: Paris, Asnières-sur-Seine)."
+                )
+            } else {
+                loadCityAt(city)
+            }
+        }
+    }
+
+    /** Villes récemment consultées (la plus récente en premier, 6 au plus). */
+    private val _recentCities = MutableStateFlow(loadRecentCities())
+    val recentCities: StateFlow<List<GeocoderClient.City>> = _recentCities
+
+    private fun loadRecentCities(): List<GeocoderClient.City> = try {
+        val arr = JSONArray(settingsPrefs.getString("recentCities", "[]"))
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            GeocoderClient.City(o.getString("name"), o.getDouble("lat"), o.getDouble("lon"))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun rememberCity(city: GeocoderClient.City) {
+        val list = (listOf(city) + _recentCities.value.filter { it.name != city.name }).take(6)
+        _recentCities.value = list
+        val arr = JSONArray()
+        list.forEach { c ->
+            arr.put(JSONObject().put("name", c.name).put("lat", c.lat).put("lon", c.lon))
+        }
+        settingsPrefs.edit().putString("recentCities", arr.toString()).apply()
+    }
+
+    /** Monuments d'une ville déjà géolocalisée (suggestion ou historique). */
+    fun loadCityAt(city: GeocoderClient.City) {
+        _state.value = UiState.Loading
+        viewModelScope.launch {
             _state.value = try {
-                val city = GeocoderClient.geocodeCity(cityName)
-                    ?: throw RuntimeException(
-                        "Ville introuvable — vérifie le nom (ex: Paris, Asnières-sur-Seine)."
-                    )
                 val raw = OverpassClient.fetchMonuments(city.lat, city.lon, radiusM = 6000)
                 var enriched = WikidataClient.enrich(raw)
                 enriched = WikipediaClient.enrich(enriched)
@@ -347,6 +434,7 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 MonumentCache.save(
                     getApplication<Application>(), enriched, city.lat, city.lon, "Ville : ${city.name}"
                 )
+                rememberCity(city)
                 UiState.Success(enriched, city.lat, city.lon, AppMode.CITY, "Ville : ${city.name}")
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Erreur inconnue")
@@ -438,8 +526,20 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     data class GuidedWalk(
         val stops: List<WalkStop>,
         val nextIndex: Int,
-        val distanceToNextM: Double? = null
-    )
+        val distanceToNextM: Double? = null,
+        /** Dernière position connue du marcheur (suivi GPS). */
+        val lat: Double? = null,
+        val lon: Double? = null,
+        /** Titre de la balade (pour le carnet). */
+        val title: String = "Balade",
+        val startedAt: Long = System.currentTimeMillis(),
+        /** Distance parcourue depuis le départ (m), cumulée sur les relevés GPS. */
+        val distanceM: Double = 0.0,
+        /** Étapes atteintes. */
+        val reached: Int = 0
+    ) {
+        val elapsedMin: Long get() = ((System.currentTimeMillis() - startedAt) / 60_000L).coerceAtLeast(0)
+    }
 
     /** Étape atteinte — consommée par l'UI qui lance la lecture audio. */
     data class WalkArrival(
@@ -474,28 +574,64 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
      * l'arrivée à moins de [WALK_ARRIVAL_M] d'une étape émet [walkArrival].
      * Retourne false si la localisation précise n'est pas disponible.
      */
-    fun startGuidedWalk(stops: List<WalkStop>): Boolean {
+    fun startGuidedWalk(stops: List<WalkStop>, title: String = "Balade"): Boolean {
         if (stops.isEmpty()) return false
         val started = walkTracker.start { lat, lon -> onWalkLocation(lat, lon) }
         if (started) {
             _walkArrival.value = null
-            _guidedWalk.value = GuidedWalk(stops, nextIndex = 0)
+            _guidedWalk.value = GuidedWalk(stops, nextIndex = 0, title = title)
         }
         return started
     }
 
+    /** Arrêt manuel : la balade est consignée au carnet si elle a réellement commencé. */
     fun stopGuidedWalk() {
         walkTracker.stop()
+        _guidedWalk.value?.let { recordWalk(it) }
         _guidedWalk.value = null
         _walkArrival.value = null
     }
 
+    /** Balades consignées (la plus récente en premier). */
+    private val _walks = MutableStateFlow(repository.walks())
+    val walks: StateFlow<List<VisitRepository.WalkRecord>> = _walks
+
+    private fun recordWalk(walk: GuidedWalk) {
+        if (walk.reached == 0 && walk.distanceM < 100.0) return // pas vraiment partie
+        _walks.value = repository.addWalk(
+            VisitRepository.WalkRecord(
+                title = walk.title,
+                startedAt = walk.startedAt,
+                endedAt = System.currentTimeMillis(),
+                distanceM = walk.distanceM,
+                stops = walk.stops.size,
+                stopsReached = walk.reached
+            )
+        )
+    }
+
+    /** Score du quiz de fin, attaché à la dernière balade consignée. */
+    fun recordQuizScore(score: Int, total: Int) {
+        if (total <= 0) return
+        _walks.value = repository.setLastWalkQuiz(score, total)
+    }
+
     private fun onWalkLocation(lat: Double, lon: Double) {
-        val walk = _guidedWalk.value ?: return
+        val walk0 = _guidedWalk.value ?: return
+        // Distance parcourue : pas entre deux relevés, en ignorant les sauts
+        // GPS aberrants (> 300 m entre deux relevés rapprochés)
+        val step = if (walk0.lat != null && walk0.lon != null) {
+            haversineM(walk0.lat, walk0.lon, lat, lon).takeIf { it < 300.0 } ?: 0.0
+        } else {
+            0.0
+        }
+        val walk = walk0.copy(distanceM = walk0.distanceM + step)
         val stop = walk.stops.getOrNull(walk.nextIndex) ?: return
         val distance = haversineM(lat, lon, stop.monument.lat, stop.monument.lon)
+        walkTracker.setDistanceHint(distance)
         if (distance <= WALK_ARRIVAL_M) {
             val last = walk.nextIndex == walk.stops.lastIndex
+            val reached = walk.copy(reached = walk.reached + 1, lat = lat, lon = lon)
             if (last) {
                 // Fin de balade : on coupe le suivi, l'UI lit la dernière étape
                 // puis propose le quiz (posé AVANT walkArrival pour que la
@@ -503,9 +639,10 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 _walkQuiz.value = WalkQuiz.build(walk.stops.map { it.monument })
                     .takeIf { it.isNotEmpty() }
                 walkTracker.stop()
+                recordWalk(reached)
                 _guidedWalk.value = null
             } else {
-                _guidedWalk.value = walk.copy(
+                _guidedWalk.value = reached.copy(
                     nextIndex = walk.nextIndex + 1,
                     distanceToNextM = null
                 )
@@ -517,7 +654,62 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 lastStep = last
             )
         } else {
-            _guidedWalk.value = walk.copy(distanceToNextM = distance)
+            _guidedWalk.value = walk.copy(distanceToNextM = distance, lat = lat, lon = lon)
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Itinéraire piéton réel (Valhalla) — mis en cache par balade
+    // ---------------------------------------------------------------
+
+    private val walkPathCache = HashMap<String, List<Pair<Double, Double>>>()
+
+    /**
+     * Géométrie piétonne position → étapes. Null si le service est
+     * indisponible (l'appelant trace alors des lignes droites).
+     */
+    suspend fun walkPath(
+        startLat: Double,
+        startLon: Double,
+        stops: List<WalkStop>
+    ): List<Pair<Double, Double>>? {
+        if (stops.isEmpty()) return null
+        val key = "%.5f,%.5f|".format(startLat, startLon) + stops.joinToString("|") { it.monument.id }
+        walkPathCache[key]?.let { return it }
+        val points = listOf(startLat to startLon) + stops.map { it.monument.lat to it.monument.lon }
+        val path = RouteClient.pedestrianRoute(points) ?: return null
+        walkPathCache[key] = path
+        return path
+    }
+
+    // ---------------------------------------------------------------
+    // Carte hors ligne — tuiles de la dernière zone « Autour de moi »
+    // ---------------------------------------------------------------
+
+    private val _offlineStatus = MutableStateFlow<String?>(null)
+    val offlineStatus: StateFlow<String?> = _offlineStatus
+
+    /** Lance le téléchargement des tuiles (thread principal). */
+    fun downloadOfflineTiles(darkTiles: Boolean) {
+        val zone = lastMonuments.value
+        if (zone == null) {
+            _offlineStatus.value = "Lance d'abord une recherche « Autour de moi »."
+            return
+        }
+        _offlineStatus.value = "⏳ Préparation…"
+        downloadOfflineTiles(
+            context = getApplication(),
+            dark = darkTiles,
+            lat = zone.lat,
+            lon = zone.lon,
+            radiusM = _searchRadiusM.value
+        ) { event ->
+            _offlineStatus.value = when (event) {
+                is OfflineTilesEvent.Progress ->
+                    if (event.total > 0) "⏳ ${event.done} / ${event.total} tuiles" else "⏳ Téléchargement…"
+                is OfflineTilesEvent.Done -> "✅ Zone disponible hors ligne (${event.total} tuiles)."
+                is OfflineTilesEvent.Failed -> "⚠️ Terminé avec ${event.errors} tuile(s) en échec."
+            }
         }
     }
 

@@ -15,8 +15,8 @@ android {
         applicationId = "com.fabrice.monumentsnearby"
         minSdk = 29
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.15.0"
+        versionCode = 28
+        versionName = "0.19.0"
     }
 
     signingConfigs {
@@ -64,6 +64,13 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Tests d'interface Compose exécutés sur la JVM (Robolectric)
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -93,4 +100,10 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // Tests d'interface Compose sur JVM (Robolectric) : parcours clés sans émulateur
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

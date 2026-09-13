@@ -1,5 +1,6 @@
 package com.fabrice.monumentsnearby.ui
 
+import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -7,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.text.TextPaint
 import android.text.TextUtils
 import android.view.MotionEvent
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -29,8 +32,10 @@ import com.fabrice.monumentsnearby.R
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.category
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.cachemanager.CacheManager
+import org.osmdroid.tileprovider.modules.SqlTileWriter
 import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.CopyrightOverlay
@@ -38,17 +43,37 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.min
 
 /**
- * Carte OpenStreetMap (osmdroid — gratuit, sans clé API).
- * - Tuiles sombres (CARTO Dark Matter) en thème sombre, OSM standard en clair
- * - Repère bleu "je suis ici"
+ * Poignée pour piloter la carte depuis Compose (recentrage).
+ * Obtenue via [rememberMapHandle] et passée à [MonumentsMap].
+ */
+class MapHandle {
+    internal var mapView: MapView? = null
+
+    /** Recentre (animation) sur [lat],[lon] en zoomant assez pour voir les noms. */
+    fun recenter(lat: Double, lon: Double) {
+        val map = mapView ?: return
+        val zoom = maxOf(map.zoomLevelDouble, LABEL_MIN_ZOOM)
+        map.controller.animateTo(GeoPoint(lat, lon), zoom, 500L)
+    }
+}
+
+@Composable
+fun rememberMapHandle(): MapHandle = remember { MapHandle() }
+
+/**
+ * Carte (osmdroid — gratuit, sans clé API).
+ * - Tuiles CARTO (Dark Matter en thème sombre, Positron en clair), haute densité
+ * - Repère bleu "je suis ici", suivi de la position en balade guidée
  * - Cercles en pointillés (couleur d'accent) : temps de marche 5 min (400 m) et 15 min (1 200 m)
- *   (vitesse de marche 4,8 km/h)
- * - Un marqueur par monument — un tap ouvre la fiche détail
- * - Étiquettes avec le nom à partir d'un zoom suffisant ([LABEL_MIN_ZOOM]),
- *   sans chevauchement (les étiquettes qui se recouvriraient sont omises)
- * - [walkRoute] : trace l'itinéraire de balade (ligne or) depuis la position
+ * - Épingles regroupées en grappes numérotées sous le zoom [CLUSTER_MAX_ZOOM]
+ *   (un tap sur une grappe zoome dessus), épingles individuelles au-delà
+ * - Étiquettes avec le nom à partir de [LABEL_MIN_ZOOM], sans chevauchement
+ * - [walkPath] : trace l'itinéraire de balade (ligne or)
  */
 @Composable
 fun MonumentsMap(
@@ -56,7 +81,9 @@ fun MonumentsMap(
     centerLat: Double,
     centerLon: Double,
     onSelectMonument: (Monument) -> Unit = {},
-    walkRoute: List<Monument>? = null,
+    walkPath: List<Pair<Double, Double>>? = null,
+    livePosition: Pair<Double, Double>? = null,
+    mapHandle: MapHandle? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -67,24 +94,24 @@ fun MonumentsMap(
     val style = MapStyle(
         dark = scheme.background.luminance() < 0.5f,
         accent = scheme.primary.toArgb(),
+        onAccent = scheme.onPrimary.toArgb(),
         route = scheme.secondary.toArgb(),
         labelFill = scheme.surface.toArgb(),
         labelText = scheme.onSurface.toArgb(),
         labelStroke = scheme.primary.toArgb()
     )
 
-    // Re-clé sur la liste et le style : les marqueurs sont reconstruits si le
+    // Re-clé sur la liste et le style : les épingles sont reconstruites si le
     // filtre ou le thème change pendant que la carte est affichée.
-    val mapView = remember(monuments, style) {
-        // User-Agent requis par les serveurs de tuiles OSM
-        Configuration.getInstance().userAgentValue = context.packageName
-        MapView(context).apply {
-            setTileSource(if (style.dark) CARTO_DARK else TileSourceFactory.MAPNIK)
+    val bundle = remember(monuments, style) {
+        configureOsmdroid(context)
+        val myPosition = GeoPoint(centerLat, centerLon)
+        lateinit var myMarker: Marker
+        val mapView = MapView(context).apply {
+            setTileSource(if (style.dark) CARTO_DARK else CARTO_LIGHT)
             setMultiTouchControls(true)
             controller.setZoom(15.0)
-            controller.setCenter(GeoPoint(centerLat, centerLon))
-
-            val myPosition = GeoPoint(centerLat, centerLon)
+            controller.setCenter(myPosition)
 
             // Attribution des tuiles (obligatoire pour OSM comme pour CARTO)
             overlays.add(
@@ -97,37 +124,27 @@ fun MonumentsMap(
             overlays.add(WalkCircle(this, myPosition, WALK_15MIN_M.toDouble(), style.accent))
             overlays.add(WalkCircle(this, myPosition, WALK_5MIN_M.toDouble(), style.accent))
 
-            // Repère "je suis ici"
-            overlays.add(
-                Marker(this).apply {
-                    position = myPosition
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    icon = context.getDrawable(R.drawable.ic_my_location)
-                }
-            )
-
-            // Marqueurs des monuments — couleur selon le type, tap → fiche
-            monuments.forEach { m ->
-                overlays.add(
-                    Marker(this).apply {
-                        position = GeoPoint(m.lat, m.lon)
-                        title = m.name
-                        snippet = m.description ?: m.kind.replace('_', ' ')
-                        // La pointe de l'épingle est à 57 % de la hauteur du
-                        // dessin (pas en bas) : ancrer dessus pour que la
-                        // pointe tombe exactement sur le lieu.
-                        setAnchor(Marker.ANCHOR_CENTER, PIN_TIP_ANCHOR)
-                        icon = context.getDrawable(pinForCategory(m.category()))
-                        setOnMarkerClickListener { _, _ ->
-                            onSelectMonument(m)
-                            true
-                        }
-                    }
-                )
+            // Repère "je suis ici" (déplacé en balade guidée)
+            myMarker = Marker(this).apply {
+                position = myPosition
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                icon = context.getDrawable(R.drawable.ic_my_location)
+                setOnMarkerClickListener { _, _ -> true }
             }
+            overlays.add(myMarker)
 
-            // Étiquettes de nom (au-dessus des marqueurs : elles reçoivent le
-            // tap en premier, sans masquer les épingles)
+            // Épingles + grappes, puis étiquettes (au-dessus : elles reçoivent
+            // le tap en premier, sans masquer les épingles)
+            overlays.add(
+                MonumentsOverlay(
+                    context = context,
+                    monuments = monuments,
+                    density = resources.displayMetrics.density,
+                    scaledDensity = resources.displayMetrics.scaledDensity,
+                    style = style,
+                    onTap = onSelectMonument
+                )
+            )
             overlays.add(
                 LabelOverlay(
                     monuments = monuments,
@@ -138,23 +155,39 @@ fun MonumentsMap(
                 )
             )
         }
+        MapBundle(mapView, myMarker)
+    }
+    val mapView = bundle.mapView
+
+    // Poignée de pilotage (recentrage) liée à la vue courante
+    DisposableEffect(mapView, mapHandle) {
+        mapHandle?.mapView = mapView
+        onDispose { if (mapHandle != null && mapHandle.mapView === mapView) mapHandle.mapView = null }
     }
 
-    // Itinéraire de balade : ligne or position → étapes, ajoutée/retirée
-    // dynamiquement (la MapView est mémorisée, pas recréée).
-    DisposableEffect(mapView, walkRoute) {
-        val polyline = walkRoute?.takeIf { it.isNotEmpty() }?.let { stops ->
+    // Position courante en balade guidée : le repère suit la marche
+    LaunchedEffect(mapView, livePosition) {
+        val target = livePosition?.let { GeoPoint(it.first, it.second) }
+            ?: GeoPoint(centerLat, centerLon)
+        bundle.myMarker.position = target
+        mapView.invalidate()
+    }
+
+    // Itinéraire de balade : ligne or, ajoutée/retirée dynamiquement (la
+    // MapView est mémorisée, pas recréée).
+    DisposableEffect(mapView, walkPath) {
+        val polyline = walkPath?.takeIf { it.size >= 2 }?.let { path ->
             Polyline(mapView).apply {
-                setPoints(
-                    listOf(GeoPoint(centerLat, centerLon)) +
-                        stops.map { GeoPoint(it.lat, it.lon) }
-                )
+                setPoints(path.map { GeoPoint(it.first, it.second) })
                 outlinePaint.color = style.route // or du thème
                 outlinePaint.strokeWidth = 9f
+                outlinePaint.strokeCap = Paint.Cap.ROUND
+                outlinePaint.strokeJoin = Paint.Join.ROUND
             }
         }
         if (polyline != null) {
-            // Après l'attribution et les cercles de marche (index 0-2), sous les marqueurs
+            // Après l'attribution et les cercles de marche (index 0-2), sous
+            // le repère et les épingles
             mapView.overlays.add(3, polyline)
             mapView.invalidate()
         }
@@ -197,32 +230,16 @@ fun MonumentsMap(
     }
 }
 
+private class MapBundle(val mapView: MapView, val myMarker: Marker)
+
 private const val WALK_5MIN_M = 400
 private const val WALK_15MIN_M = 1200
 
-/** Couleurs (ARGB) et variante de tuiles dérivées du thème Compose. */
-private data class MapStyle(
-    val dark: Boolean,
-    val accent: Int,
-    val route: Int,
-    val labelFill: Int,
-    val labelText: Int,
-    val labelStroke: Int
-)
-
-/** Tuiles sombres CARTO « Dark Matter » (gratuites, attribution requise). */
-private val CARTO_DARK = XYTileSource(
-    "CartoDarkMatter", 0, 20, 256, ".png",
-    arrayOf(
-        "https://a.basemaps.cartocdn.com/dark_all/",
-        "https://b.basemaps.cartocdn.com/dark_all/",
-        "https://c.basemaps.cartocdn.com/dark_all/"
-    ),
-    "© OpenStreetMap contributors © CARTO"
-)
-
 /** Zoom à partir duquel les noms des monuments sont affichés sur la carte. */
 private const val LABEL_MIN_ZOOM = 16.0
+
+/** En dessous de ce zoom, les épingles proches sont regroupées en grappes. */
+private const val CLUSTER_MAX_ZOOM = LABEL_MIN_ZOOM
 
 /** Ancrage vertical de la pointe des épingles (y = 62 sur un viewport de 108). */
 private const val PIN_TIP_ANCHOR = 62f / 108f
@@ -230,6 +247,233 @@ private const val PIN_TIP_ANCHOR = 62f / 108f
 /** Demi-largeur et hauteur visibles de l'épingle (dp), pour éviter de la couvrir. */
 private const val PIN_HALF_WIDTH_DP = 9f
 private const val PIN_HEIGHT_DP = 21f
+
+/** Couleurs (ARGB) et variante de tuiles dérivées du thème Compose. */
+private data class MapStyle(
+    val dark: Boolean,
+    val accent: Int,
+    val onAccent: Int,
+    val route: Int,
+    val labelFill: Int,
+    val labelText: Int,
+    val labelStroke: Int
+)
+
+private const val CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO"
+
+private fun cartoSource(name: String, variant: String) = XYTileSource(
+    name, 0, 20, 512, "@2x.png",
+    arrayOf(
+        "https://a.basemaps.cartocdn.com/$variant/",
+        "https://b.basemaps.cartocdn.com/$variant/",
+        "https://c.basemaps.cartocdn.com/$variant/"
+    ),
+    CARTO_ATTRIBUTION
+)
+
+/** Tuiles CARTO (gratuites, attribution requise), en haute densité (@2x). */
+private val CARTO_DARK = cartoSource("CartoDarkMatter2x", "dark_all")
+private val CARTO_LIGHT = cartoSource("CartoPositron2x", "light_all")
+
+/** Configuration osmdroid commune (User-Agent, rétention du cache de tuiles). */
+private fun configureOsmdroid(context: Context) {
+    Configuration.getInstance().apply {
+        // User-Agent requis par les serveurs de tuiles
+        userAgentValue = context.packageName
+        // Les tuiles expirées restent servies 30 jours : utile hors ligne
+        expirationExtendedDuration = 30L * 24 * 60 * 60 * 1000
+    }
+}
+
+/** Avancement d'un téléchargement de tuiles pour l'usage hors ligne. */
+sealed class OfflineTilesEvent {
+    data class Progress(val done: Int, val total: Int) : OfflineTilesEvent()
+    data class Done(val total: Int) : OfflineTilesEvent()
+    data class Failed(val errors: Int) : OfflineTilesEvent()
+}
+
+/**
+ * Télécharge dans le cache osmdroid les tuiles CARTO d'un carré de [radiusM]
+ * autour de [lat],[lon] (zooms 12 à 16, 15 au-delà de 5 km). Doit être appelé
+ * sur le thread principal ; [onEvent] y est rappelé.
+ */
+fun downloadOfflineTiles(
+    context: Context,
+    dark: Boolean,
+    lat: Double,
+    lon: Double,
+    radiusM: Int,
+    onEvent: (OfflineTilesEvent) -> Unit
+) {
+    configureOsmdroid(context)
+    val source = if (dark) CARTO_DARK else CARTO_LIGHT
+    val manager = CacheManager(source, SqlTileWriter(), 0, 20)
+    val dLat = radiusM / 111_320.0
+    val dLon = radiusM / (111_320.0 * cos(Math.toRadians(lat)))
+    val box = BoundingBox(lat + dLat, lon + dLon, lat - dLat, lon - dLon)
+    val maxZoom = if (radiusM > 5000) 15 else 16
+    var total = 0
+    manager.downloadAreaAsyncNoUI(
+        context, box, 12, maxZoom,
+        object : CacheManager.CacheManagerCallback {
+            override fun onTaskComplete() = onEvent(OfflineTilesEvent.Done(total))
+            override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) =
+                onEvent(OfflineTilesEvent.Progress(progress, total))
+            override fun downloadStarted() = Unit
+            override fun setPossibleTilesInArea(total0: Int) {
+                total = total0
+                onEvent(OfflineTilesEvent.Progress(0, total0))
+            }
+            override fun onTaskFailed(errors: Int) = onEvent(OfflineTilesEvent.Failed(errors))
+        }
+    )
+}
+
+/**
+ * Couleur du marqueur selon la catégorie du monument :
+ * rouge = musée, violet = religieux, orange = château/palais/fort,
+ * marron = ruines, bleu = monument/mémorial, vert = autre.
+ */
+private fun pinForCategory(category: String): Int = when (category) {
+    "musée" -> R.drawable.ic_pin_rouge
+    "religieux" -> R.drawable.ic_pin_violet
+    "château" -> R.drawable.ic_pin_orange
+    "ruines" -> R.drawable.ic_pin_marron
+    "monument" -> R.drawable.ic_pin_bleu
+    else -> R.drawable.ic_pin_vert
+}
+
+/**
+ * Épingles des monuments et grappes. Sous [CLUSTER_MAX_ZOOM], les épingles
+ * tombant dans une même cellule d'écran (~64 dp) sont fusionnées en une
+ * pastille numérotée ; un tap dessus zoome de deux niveaux sur la grappe.
+ * Un tap sur une épingle ouvre la fiche.
+ */
+private class MonumentsOverlay(
+    context: Context,
+    private val monuments: List<Monument>,
+    private val density: Float,
+    scaledDensity: Float,
+    style: MapStyle, // paramètre (pas propriété) : sinon Paint.style le masquerait dans apply {}
+    private val onTap: (Monument) -> Unit
+) : Overlay() {
+
+    private class Pin(val rect: RectF, val monument: Monument)
+    private class Cluster(val x: Float, val y: Float, val radius: Float, val lat: Double, val lon: Double)
+
+    private val drawables = HashMap<Int, Drawable>()
+    private fun drawableFor(context: Context, m: Monument): Drawable =
+        drawables.getOrPut(pinForCategory(m.category())) { context.getDrawable(pinForCategory(m.category()))!! }
+
+    private val appContext = context.applicationContext
+    private val pinWidth: Int
+    private val pinHeight: Int
+    private val pinTip: Int
+
+    init {
+        val sample = appContext.getDrawable(R.drawable.ic_pin_bleu)!!
+        pinWidth = sample.intrinsicWidth
+        pinHeight = sample.intrinsicHeight
+        pinTip = (pinHeight * PIN_TIP_ANCHOR).toInt()
+    }
+
+    private val cell = (64f * density).toInt().coerceAtLeast(1)
+    private val point = Point()
+    private val pins = ArrayList<Pin>()
+    private val clusters = ArrayList<Cluster>()
+
+    private val clusterFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = style.accent }
+    private val clusterRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = style.labelFill
+        this.style = Paint.Style.STROKE
+        strokeWidth = 3f * density
+    }
+    private val clusterText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = style.onAccent
+        textSize = 14f * scaledDensity
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+
+    override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
+        if (shadow) return
+        pins.clear()
+        clusters.clear()
+        val projection = mapView.projection
+        val width = canvas.width
+        val height = canvas.height
+        val clustering = mapView.zoomLevelDouble < CLUSTER_MAX_ZOOM
+
+        // Regroupement par cellule d'écran
+        val groups = LinkedHashMap<Long, MutableList<Triple<Monument, Int, Int>>>()
+        for (m in monuments) {
+            projection.toPixels(GeoPoint(m.lat, m.lon), point)
+            val x = point.x
+            val y = point.y
+            if (x < -cell || x > width + cell || y < -cell || y > height + cell) continue
+            val key = if (clustering) {
+                (Math.floorDiv(x, cell).toLong() shl 32) or (Math.floorDiv(y, cell).toLong() and 0xffffffffL)
+            } else {
+                groups.size.toLong() // pas de regroupement : une cellule par épingle
+            }
+            groups.getOrPut(key) { ArrayList() }.add(Triple(m, x, y))
+        }
+
+        for (members in groups.values) {
+            if (members.size == 1) {
+                val (m, x, y) = members[0]
+                drawPin(canvas, m, x, y)
+            } else {
+                val cx = members.sumOf { it.second }.toFloat() / members.size
+                val cy = members.sumOf { it.third }.toFloat() / members.size
+                val radius = (16f + min(members.size, 40) * 0.35f) * density
+                canvas.drawCircle(cx, cy, radius, clusterFill)
+                canvas.drawCircle(cx, cy, radius, clusterRing)
+                canvas.drawText(
+                    members.size.toString(),
+                    cx,
+                    cy - (clusterText.ascent() + clusterText.descent()) / 2,
+                    clusterText
+                )
+                clusters.add(
+                    Cluster(
+                        cx, cy, radius,
+                        members.sumOf { it.first.lat } / members.size,
+                        members.sumOf { it.first.lon } / members.size
+                    )
+                )
+            }
+        }
+    }
+
+    private fun drawPin(canvas: Canvas, m: Monument, x: Int, y: Int) {
+        val d = drawableFor(appContext, m)
+        val left = x - pinWidth / 2
+        val top = y - pinTip
+        d.setBounds(left, top, left + pinWidth, top + pinHeight)
+        d.draw(canvas)
+        pins.add(
+            Pin(
+                RectF(
+                    (x - PIN_HALF_WIDTH_DP * density), y - PIN_HEIGHT_DP * density,
+                    (x + PIN_HALF_WIDTH_DP * density), y + 2f * density
+                ),
+                m
+            )
+        )
+    }
+
+    override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
+        clusters.firstOrNull { hypot(e.x - it.x, e.y - it.y) <= it.radius }?.let { c ->
+            val zoom = min(mapView.zoomLevelDouble + 2.0, 19.0)
+            mapView.controller.animateTo(GeoPoint(c.lat, c.lon), zoom, 400L)
+            return true
+        }
+        val hit = pins.lastOrNull { it.rect.contains(e.x, e.y) } ?: return false
+        onTap(hit.monument)
+        return true
+    }
+}
 
 /**
  * Étiquettes « nom du monument » dessinées à côté de chaque épingle quand la
@@ -338,20 +582,6 @@ private class LabelOverlay(
         onTap(hit.second)
         return true
     }
-}
-
-/**
- * Couleur du marqueur selon la catégorie du monument :
- * rouge = musée, violet = religieux, orange = château/palais/fort,
- * marron = ruines, bleu = monument/mémorial, vert = autre.
- */
-private fun pinForCategory(category: String): Int = when (category) {
-    "musée" -> R.drawable.ic_pin_rouge
-    "religieux" -> R.drawable.ic_pin_violet
-    "château" -> R.drawable.ic_pin_orange
-    "ruines" -> R.drawable.ic_pin_marron
-    "monument" -> R.drawable.ic_pin_bleu
-    else -> R.drawable.ic_pin_vert
 }
 
 /**

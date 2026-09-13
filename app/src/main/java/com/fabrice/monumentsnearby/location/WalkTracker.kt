@@ -17,11 +17,32 @@ import com.google.android.gms.location.Priority
 
 /**
  * Suivi de position continu pour la balade guidée : tant que la balade est
- * active (app ouverte), la position est rafraîchie toutes les ~4 s et remontée
- * au ViewModel, qui déclenche la lecture audio à l'arrivée à chaque étape.
+ * active (app ouverte), la position est remontée au ViewModel, qui déclenche
+ * la lecture audio à l'arrivée à chaque étape.
  * FusedLocationProvider si disponible, repli LocationManager GPS sinon.
+ *
+ * Précision adaptative : loin de la prochaine étape, des relevés espacés et
+ * économes ; à l'approche, des relevés rapprochés et précis (voir [Tier]).
  */
 class WalkTracker(context: Context) {
+
+    /** Paliers de suivi selon la distance à la prochaine étape. */
+    enum class Tier(val intervalMs: Long, val minMoveM: Float, val highAccuracy: Boolean) {
+        /** > 600 m : économie de batterie */
+        FAR(12_000L, 20f, false),
+        /** 150–600 m */
+        MID(5_000L, 8f, true),
+        /** < 150 m : détection d'arrivée fine (rayon 40 m) */
+        NEAR(2_000L, 3f, true);
+
+        companion object {
+            fun forDistance(distanceM: Double): Tier = when {
+                distanceM > 600 -> FAR
+                distanceM > 150 -> MID
+                else -> NEAR
+            }
+        }
+    }
 
     private val appContext = context.applicationContext
     private val manager =
@@ -34,6 +55,8 @@ class WalkTracker(context: Context) {
 
     private var fusedCallback: LocationCallback? = null
     private var managerListener: LocationListener? = null
+    private var onLocation: ((Double, Double) -> Unit)? = null
+    private var tier: Tier = Tier.MID
 
     /** La balade guidée exige la localisation précise (arrivée détectée à 40 m). */
     fun hasPermission(): Boolean =
@@ -44,16 +67,36 @@ class WalkTracker(context: Context) {
      * Démarre le suivi ; [onLocation] est invoqué sur le thread principal.
      * Retourne false si la permission manque ou qu'aucune source n'est utilisable.
      */
-    @SuppressLint("MissingPermission") // vérifiée par hasPermission() en tête
     fun start(onLocation: (lat: Double, lon: Double) -> Unit): Boolean {
         if (!hasPermission()) return false
-        stop()
+        this.onLocation = onLocation
+        tier = Tier.MID
+        return subscribe()
+    }
+
+    /**
+     * Adapte la fréquence et la précision à la distance restante ; ne
+     * réabonne le fournisseur que si le palier change.
+     */
+    fun setDistanceHint(distanceM: Double) {
+        val next = Tier.forDistance(distanceM)
+        if (next == tier || onLocation == null) return
+        tier = next
+        subscribe()
+    }
+
+    @SuppressLint("MissingPermission") // vérifiée par hasPermission() en tête
+    private fun subscribe(): Boolean {
+        val onLocation = this.onLocation ?: return false
+        unsubscribe()
         val client = fused
         if (client != null) {
             val request = LocationRequest.Builder(
-                Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS
+                if (tier.highAccuracy) Priority.PRIORITY_HIGH_ACCURACY
+                else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                tier.intervalMs
             )
-                .setMinUpdateDistanceMeters(MIN_MOVE_M)
+                .setMinUpdateDistanceMeters(tier.minMoveM)
                 .build()
             val callback = object : LocationCallback() {
                 override fun onLocationResult(result: LocationResult) {
@@ -67,7 +110,7 @@ class WalkTracker(context: Context) {
         val listener = LocationListener { loc -> onLocation(loc.latitude, loc.longitude) }
         return try {
             manager.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER, UPDATE_INTERVAL_MS, MIN_MOVE_M,
+                LocationManager.GPS_PROVIDER, tier.intervalMs, tier.minMoveM,
                 listener, Looper.getMainLooper()
             )
             managerListener = listener
@@ -78,14 +121,14 @@ class WalkTracker(context: Context) {
     }
 
     fun stop() {
+        unsubscribe()
+        onLocation = null
+    }
+
+    private fun unsubscribe() {
         fusedCallback?.let { fused?.removeLocationUpdates(it) }
         fusedCallback = null
         managerListener?.let { manager.removeUpdates(it) }
         managerListener = null
-    }
-
-    private companion object {
-        const val UPDATE_INTERVAL_MS = 4000L
-        const val MIN_MOVE_M = 5f
     }
 }
