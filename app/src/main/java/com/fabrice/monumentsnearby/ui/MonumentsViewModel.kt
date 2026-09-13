@@ -13,6 +13,7 @@ import com.fabrice.monumentsnearby.data.GeocoderClient
 import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.MonumentCache
 import com.fabrice.monumentsnearby.data.OverpassClient
+import com.fabrice.monumentsnearby.data.RouteClient
 import com.fabrice.monumentsnearby.data.VisitRepository
 import com.fabrice.monumentsnearby.data.WalkQuiz
 import com.fabrice.monumentsnearby.data.category
@@ -438,7 +439,10 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     data class GuidedWalk(
         val stops: List<WalkStop>,
         val nextIndex: Int,
-        val distanceToNextM: Double? = null
+        val distanceToNextM: Double? = null,
+        /** Dernière position connue du marcheur (suivi GPS). */
+        val lat: Double? = null,
+        val lon: Double? = null
     )
 
     /** Étape atteinte — consommée par l'UI qui lance la lecture audio. */
@@ -507,7 +511,9 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 _guidedWalk.value = walk.copy(
                     nextIndex = walk.nextIndex + 1,
-                    distanceToNextM = null
+                    distanceToNextM = null,
+                    lat = lat,
+                    lon = lon
                 )
             }
             _walkArrival.value = WalkArrival(
@@ -517,7 +523,62 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
                 lastStep = last
             )
         } else {
-            _guidedWalk.value = walk.copy(distanceToNextM = distance)
+            _guidedWalk.value = walk.copy(distanceToNextM = distance, lat = lat, lon = lon)
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Itinéraire piéton réel (Valhalla) — mis en cache par balade
+    // ---------------------------------------------------------------
+
+    private val walkPathCache = HashMap<String, List<Pair<Double, Double>>>()
+
+    /**
+     * Géométrie piétonne position → étapes. Null si le service est
+     * indisponible (l'appelant trace alors des lignes droites).
+     */
+    suspend fun walkPath(
+        startLat: Double,
+        startLon: Double,
+        stops: List<WalkStop>
+    ): List<Pair<Double, Double>>? {
+        if (stops.isEmpty()) return null
+        val key = "%.5f,%.5f|".format(startLat, startLon) + stops.joinToString("|") { it.monument.id }
+        walkPathCache[key]?.let { return it }
+        val points = listOf(startLat to startLon) + stops.map { it.monument.lat to it.monument.lon }
+        val path = RouteClient.pedestrianRoute(points) ?: return null
+        walkPathCache[key] = path
+        return path
+    }
+
+    // ---------------------------------------------------------------
+    // Carte hors ligne — tuiles de la dernière zone « Autour de moi »
+    // ---------------------------------------------------------------
+
+    private val _offlineStatus = MutableStateFlow<String?>(null)
+    val offlineStatus: StateFlow<String?> = _offlineStatus
+
+    /** Lance le téléchargement des tuiles (thread principal). */
+    fun downloadOfflineTiles(darkTiles: Boolean) {
+        val zone = lastMonuments.value
+        if (zone == null) {
+            _offlineStatus.value = "Lance d'abord une recherche « Autour de moi »."
+            return
+        }
+        _offlineStatus.value = "⏳ Préparation…"
+        downloadOfflineTiles(
+            context = getApplication(),
+            dark = darkTiles,
+            lat = zone.lat,
+            lon = zone.lon,
+            radiusM = _searchRadiusM.value
+        ) { event ->
+            _offlineStatus.value = when (event) {
+                is OfflineTilesEvent.Progress ->
+                    if (event.total > 0) "⏳ ${event.done} / ${event.total} tuiles" else "⏳ Téléchargement…"
+                is OfflineTilesEvent.Done -> "✅ Zone disponible hors ligne (${event.total} tuiles)."
+                is OfflineTilesEvent.Failed -> "⚠️ Terminé avec ${event.errors} tuile(s) en échec."
+            }
         }
     }
 

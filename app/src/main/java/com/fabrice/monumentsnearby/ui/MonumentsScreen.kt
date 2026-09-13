@@ -53,6 +53,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -85,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -1003,13 +1005,46 @@ private fun AroundContent(
                                 .fillMaxWidth()
                         ) {
                             val route = activeGuidedWalk?.stops ?: walkStops
+                            // Tracé : lignes droites tout de suite, puis
+                            // itinéraire piéton réel dès qu'il est disponible
+                            var walkPath by remember { mutableStateOf<List<Pair<Double, Double>>?>(null) }
+                            LaunchedEffect(route, effective.lat, effective.lon) {
+                                walkPath = route?.let { stops ->
+                                    listOf(effective.lat to effective.lon) +
+                                        stops.map { it.monument.lat to it.monument.lon }
+                                }
+                                if (route != null) {
+                                    viewModel.walkPath(effective.lat, effective.lon, route)?.let {
+                                        walkPath = it
+                                    }
+                                }
+                            }
+                            val livePosition = activeGuidedWalk?.let { walk ->
+                                walk.lat?.let { la -> walk.lon?.let { lo -> la to lo } }
+                            }
+                            val mapHandle = rememberMapHandle()
                             MonumentsMap(
                                 monuments = visible,
                                 centerLat = effective.lat,
                                 centerLon = effective.lon,
                                 onSelectMonument = onSelectMonument,
-                                walkRoute = route?.map { it.monument }
+                                walkPath = walkPath,
+                                livePosition = livePosition,
+                                mapHandle = mapHandle
                             )
+                            // Recentrer sur ma position (celle de la marche en balade guidée)
+                            FilledTonalIconButton(
+                                onClick = {
+                                    val target = livePosition ?: (effective.lat to effective.lon)
+                                    mapHandle.recenter(target.first, target.second)
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(10.dp)
+                                    .semantics { contentDescription = "Recentrer sur ma position" }
+                            ) {
+                                Icon(Icons.Filled.LocationOn, contentDescription = null)
+                            }
                             // Retour toujours visible sur la carte (le geste
                             // retour système ramène aussi à la liste)
                             Row(
@@ -2457,6 +2492,35 @@ private fun SettingsDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(14.dp))
+
+                // --- Carte hors ligne ---
+                val offlineStatus by viewModel.offlineStatus.collectAsStateWithLifecycle()
+                val darkTiles = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                Text(
+                    "Carte hors ligne",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "Télécharge les tuiles de la dernière zone « Autour de moi » (rayon de " +
+                        "recherche) pour garder la carte sans réseau. Les fiches déjà ouvertes " +
+                        "restent disponibles.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = { viewModel.downloadOfflineTiles(darkTiles) },
+                    enabled = offlineStatus?.startsWith("⏳") != true
+                ) { Text("📥 Télécharger la zone") }
+                offlineStatus?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
 
                 // --- Découverte ---
