@@ -18,6 +18,11 @@ import com.fabrice.monumentsnearby.ui.MonumentsScreen
 import com.fabrice.monumentsnearby.ui.MonumentsViewModel
 import com.fabrice.monumentsnearby.ui.UiState
 import com.fabrice.monumentsnearby.ui.theme.MonumentsNearbyTheme
+import com.fabrice.monumentsnearby.ui.theme.ThemeMode
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -54,7 +59,21 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MonumentsNearbyTheme {
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val darkTheme = when (themeMode) {
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            }
+            // Icônes de la barre d'état claires sur fond sombre, et inversement
+            val view = LocalView.current
+            SideEffect {
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+            MonumentsNearbyTheme(darkTheme = darkTheme) {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 MonumentsScreen(
                     state = state,
