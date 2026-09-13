@@ -159,6 +159,7 @@ class GuideSpeaker(context: Context) : TextToSpeech.OnInitListener {
         if (!ready) {
             pending = text
             pendingKey = key
+            resumedFromPhrase = 0 // pas encore de reprise à annoncer
             return
         }
         rememberProgress()

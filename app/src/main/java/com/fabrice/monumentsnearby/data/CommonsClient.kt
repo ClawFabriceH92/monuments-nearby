@@ -83,8 +83,9 @@ object CommonsClient {
                 author = value("Artist"),
                 license = value("LicenseShortName"),
                 licenseUrl = value("LicenseUrl"),
-                filePage = "https://commons.wikimedia.org/wiki/" +
-                    URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20")
+                // Le titre garde ses caractères UTF-8 et son « : » (URL lisible,
+                // acceptée par Commons) ; seuls les espaces deviennent des « _ »
+                filePage = "https://commons.wikimedia.org/wiki/" + title.replace(' ', '_')
             )
         }
         return null
