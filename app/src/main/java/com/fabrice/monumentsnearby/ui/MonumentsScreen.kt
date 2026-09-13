@@ -113,6 +113,14 @@ import com.fabrice.monumentsnearby.location.GuidedVisitBus
 import com.fabrice.monumentsnearby.location.NearbyAlert
 import com.fabrice.monumentsnearby.tts.GuideSpeaker
 import com.fabrice.monumentsnearby.ui.theme.CategoryColors
+import com.fabrice.monumentsnearby.ui.theme.ThemeMode
+import com.fabrice.monumentsnearby.ui.theme.auroraBackground
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Size
 import com.fabrice.monumentsnearby.update.AutoUpdater
 import com.fabrice.monumentsnearby.update.UpdateChecker
 import com.fabrice.monumentsnearby.update.UpdateManager
@@ -345,6 +353,9 @@ fun MonumentsScreen(
         }
     } else {
         Scaffold(
+            modifier = Modifier.auroraBackground(),
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
@@ -363,9 +374,9 @@ fun MonumentsScreen(
                         )
                     },
                     colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = Color.White,
-                        actionIconContentColor = Color.White
+                        containerColor = Color.Transparent,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        actionIconContentColor = MaterialTheme.colorScheme.onBackground
                     ),
                     actions = {
                         // Alerte de proximité : cloche dorée quand elle est active
@@ -381,7 +392,7 @@ fun MonumentsScreen(
                                 tint = if (geofencesActive) {
                                     MaterialTheme.colorScheme.secondary
                                 } else {
-                                    Color.White.copy(alpha = 0.55f)
+                                    MaterialTheme.colorScheme.onSurfaceVariant
                                 }
                             )
                         }
@@ -396,7 +407,7 @@ fun MonumentsScreen(
                     // Balade guidée en cours : prochaine étape + distance restante
                     guidedWalk?.let { walk ->
                         walk.stops.getOrNull(walk.nextIndex)?.let { nextStop ->
-                            Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+                            Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -437,20 +448,42 @@ fun MonumentsScreen(
                             onStop = { speaker.stop() }
                         )
                     }
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    val navGlow = MaterialTheme.colorScheme.primary
+                    val navColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = navGlow,
+                        selectedTextColor = navGlow,
+                        indicatorColor = navGlow.copy(alpha = 0.18f),
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        modifier = Modifier.drawBehind {
+                            // Liseré lumineux en haut de la barre
+                            drawRect(
+                                brush = Brush.horizontalGradient(
+                                    listOf(Color.Transparent, navGlow, Color.Transparent)
+                                ),
+                                size = Size(size.width, 2.dp.toPx())
+                            )
+                        }
+                    ) {
                         NavigationBarItem(
+                            colors = navColors,
                             selected = selectedTab == AppTab.AROUND,
                             onClick = { selectedTab = AppTab.AROUND },
                             icon = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
                             label = { Text("Autour de moi", maxLines = 1, softWrap = false) }
                         )
                         NavigationBarItem(
+                            colors = navColors,
                             selected = selectedTab == AppTab.EXPLORE,
                             onClick = { selectedTab = AppTab.EXPLORE },
                             icon = { Icon(Icons.Filled.Search, contentDescription = null) },
                             label = { Text("Explorer") }
                         )
                         NavigationBarItem(
+                            colors = navColors,
                             selected = selectedTab == AppTab.BOOK,
                             onClick = { selectedTab = AppTab.BOOK },
                             icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
@@ -462,10 +495,22 @@ fun MonumentsScreen(
             floatingActionButton = {
                 // Balades : action phare, toujours à portée (liste comme carte)
                 if (selectedTab == AppTab.AROUND && mapDisplayable && !isMuseumMode) {
+                    val fabGlow = MaterialTheme.colorScheme.primary
                     ExtendedFloatingActionButton(
                         text = { Text("🥾 Balades") },
                         icon = {},
-                        onClick = { showWalk = true }
+                        onClick = { showWalk = true },
+                        shape = RoundedCornerShape(20.dp),
+                        containerColor = fabGlow,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
+                        // Halo lumineux de la couleur d'accent
+                        modifier = Modifier.shadow(
+                            elevation = 14.dp,
+                            shape = RoundedCornerShape(20.dp),
+                            ambientColor = fabGlow,
+                            spotColor = fabGlow
+                        )
                     )
                 }
             }
@@ -670,7 +715,7 @@ private fun LectureBar(
     onTogglePause: () -> Unit,
     onStop: () -> Unit
 ) {
-    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1750,6 +1795,9 @@ private fun MonumentDetailScreen(
     var articleText by remember(monument.id) { mutableStateOf<String?>(null) }
 
     Scaffold(
+        modifier = Modifier.auroraBackground(),
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
@@ -1774,10 +1822,10 @@ private fun MonumentDetailScreen(
                     }
                 },
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    navigationIconContentColor = Color.White,
-                    titleContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    containerColor = Color.Transparent,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         },
@@ -2140,33 +2188,33 @@ private fun ArticleScreen(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface
+            modifier = Modifier
+                .fillMaxSize()
+                .auroraBackground(),
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground
         ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.primary)
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onClose) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Retour",
-                            tint = Color.White
+                            contentDescription = "Retour"
                         )
                     }
                     Text(
                         monumentName,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = onListen) { Text("🔊 Écouter", color = Color.White) }
+                    TextButton(onClick = onListen) { Text("🔊 Écouter") }
                 }
                 Text(
                     text,
@@ -2331,24 +2379,26 @@ private fun SettingsDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface
+            modifier = Modifier
+                .fillMaxSize()
+                .auroraBackground(),
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground
         ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.primary)
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         "⚙️ Réglages",
                         style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = onDismiss) { Text("✕ Fermer", color = Color.White) }
+                    TextButton(onClick = onDismiss) { Text("✕ Fermer") }
                 }
                 Column(
                     Modifier
@@ -2377,6 +2427,33 @@ private fun SettingsDialog(
                 }
                 Text(
                     "Appliqué à la prochaine recherche « Autour de moi ».",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(14.dp))
+
+                // --- Apparence ---
+                val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+                Text(
+                    "Apparence",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ThemeMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = themeMode == mode,
+                            onClick = { viewModel.setThemeMode(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index, count = ThemeMode.entries.size
+                            ),
+                            label = { Text(mode.label) }
+                        )
+                    }
+                }
+                Text(
+                    "Thème sombre « Aurora » par défaut : la carte passe aussi en tuiles sombres.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2586,12 +2663,24 @@ private fun formatRate(rate: Float): String = if (rate == 1f) "1×" else "${rate
 
 @Composable
 private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
-    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+    ) {
+        // Trait d'accent lumineux devant le titre
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(14.dp)
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
 }
 
 @Composable
@@ -2634,9 +2723,22 @@ private fun MonumentCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onCardClick),
-        shape = RoundedCornerShape(18.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(22.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+            contentColor = MaterialTheme.colorScheme.onSurface
+        ),
+        // Bord « verre » : dégradé cyan → violet
+        border = BorderStroke(
+            1.dp,
+            Brush.linearGradient(
+                listOf(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f)
+                )
+            )
+        )
     ) {
         Column {
             if (monument.imageUrl != null) {

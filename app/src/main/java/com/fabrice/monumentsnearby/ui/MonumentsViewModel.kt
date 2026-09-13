@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.fabrice.monumentsnearby.ui.theme.ThemeMode
 import com.fabrice.monumentsnearby.DailyDiscoveryWorker
 import com.fabrice.monumentsnearby.data.GeocoderClient
 import com.fabrice.monumentsnearby.data.Monument
@@ -65,6 +66,15 @@ class MonumentsViewModel(application: Application) : AndroidViewModel(applicatio
     fun setSearchRadius(radiusM: Int) {
         _searchRadiusM.value = radiusM
         settingsPrefs.edit().putInt("searchRadiusM", radiusM).apply()
+    }
+
+    /** Apparence : sombre (défaut), clair ou système (persisté). */
+    private val _themeMode = MutableStateFlow(ThemeMode.fromKey(settingsPrefs.getString("themeMode", null)))
+    val themeMode: StateFlow<ThemeMode> = _themeMode
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        settingsPrefs.edit().putString("themeMode", mode.key).apply()
     }
 
     /** Visite guidée : lecture audio automatique à l'approche d'un monument. */

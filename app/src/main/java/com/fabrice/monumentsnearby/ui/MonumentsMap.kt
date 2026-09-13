@@ -11,12 +11,15 @@ import android.text.TextPaint
 import android.text.TextUtils
 import android.view.MotionEvent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -27,8 +30,10 @@ import com.fabrice.monumentsnearby.data.Monument
 import com.fabrice.monumentsnearby.data.category
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
@@ -36,8 +41,9 @@ import org.osmdroid.views.overlay.Polyline
 
 /**
  * Carte OpenStreetMap (osmdroid — gratuit, sans clé API).
+ * - Tuiles sombres (CARTO Dark Matter) en thème sombre, OSM standard en clair
  * - Repère bleu "je suis ici"
- * - Cercles rouges en pointillés : temps de marche 5 min (400 m) et 15 min (1 200 m)
+ * - Cercles en pointillés (couleur d'accent) : temps de marche 5 min (400 m) et 15 min (1 200 m)
  *   (vitesse de marche 4,8 km/h)
  * - Un marqueur par monument — un tap ouvre la fiche détail
  * - Étiquettes avec le nom à partir d'un zoom suffisant ([LABEL_MIN_ZOOM]),
@@ -56,22 +62,40 @@ fun MonumentsMap(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Re-clé sur la liste : les marqueurs sont reconstruits si le filtre change
-    // pendant que la carte est affichée.
-    val mapView = remember(monuments) {
+    // Style de carte dérivé du thème : tuiles sombres + accents cyan en sombre
+    val scheme = MaterialTheme.colorScheme
+    val style = MapStyle(
+        dark = scheme.background.luminance() < 0.5f,
+        accent = scheme.primary.toArgb(),
+        route = scheme.secondary.toArgb(),
+        labelFill = scheme.surface.toArgb(),
+        labelText = scheme.onSurface.toArgb(),
+        labelStroke = scheme.primary.toArgb()
+    )
+
+    // Re-clé sur la liste et le style : les marqueurs sont reconstruits si le
+    // filtre ou le thème change pendant que la carte est affichée.
+    val mapView = remember(monuments, style) {
         // User-Agent requis par les serveurs de tuiles OSM
         Configuration.getInstance().userAgentValue = context.packageName
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(if (style.dark) CARTO_DARK else TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             controller.setZoom(15.0)
             controller.setCenter(GeoPoint(centerLat, centerLon))
 
             val myPosition = GeoPoint(centerLat, centerLon)
 
+            // Attribution des tuiles (obligatoire pour OSM comme pour CARTO)
+            overlays.add(
+                CopyrightOverlay(context).apply {
+                    setTextColor(if (style.dark) Color.LTGRAY else Color.DKGRAY)
+                }
+            )
+
             // Cercles de temps de marche : 15 min puis 5 min
-            overlays.add(WalkCircle(this, myPosition, WALK_15MIN_M.toDouble()))
-            overlays.add(WalkCircle(this, myPosition, WALK_5MIN_M.toDouble()))
+            overlays.add(WalkCircle(this, myPosition, WALK_15MIN_M.toDouble(), style.accent))
+            overlays.add(WalkCircle(this, myPosition, WALK_5MIN_M.toDouble(), style.accent))
 
             // Repère "je suis ici"
             overlays.add(
@@ -109,6 +133,7 @@ fun MonumentsMap(
                     monuments = monuments,
                     density = resources.displayMetrics.density,
                     scaledDensity = resources.displayMetrics.scaledDensity,
+                    style = style,
                     onTap = onSelectMonument
                 )
             )
@@ -124,13 +149,13 @@ fun MonumentsMap(
                     listOf(GeoPoint(centerLat, centerLon)) +
                         stops.map { GeoPoint(it.lat, it.lon) }
                 )
-                outlinePaint.color = Color.rgb(201, 151, 43) // or du thème
+                outlinePaint.color = style.route // or du thème
                 outlinePaint.strokeWidth = 9f
             }
         }
         if (polyline != null) {
-            // Après les cercles de marche (index 0-1), sous les marqueurs
-            mapView.overlays.add(2, polyline)
+            // Après l'attribution et les cercles de marche (index 0-2), sous les marqueurs
+            mapView.overlays.add(3, polyline)
             mapView.invalidate()
         }
         onDispose {
@@ -175,6 +200,27 @@ fun MonumentsMap(
 private const val WALK_5MIN_M = 400
 private const val WALK_15MIN_M = 1200
 
+/** Couleurs (ARGB) et variante de tuiles dérivées du thème Compose. */
+private data class MapStyle(
+    val dark: Boolean,
+    val accent: Int,
+    val route: Int,
+    val labelFill: Int,
+    val labelText: Int,
+    val labelStroke: Int
+)
+
+/** Tuiles sombres CARTO « Dark Matter » (gratuites, attribution requise). */
+private val CARTO_DARK = XYTileSource(
+    "CartoDarkMatter", 0, 20, 256, ".png",
+    arrayOf(
+        "https://a.basemaps.cartocdn.com/dark_all/",
+        "https://b.basemaps.cartocdn.com/dark_all/",
+        "https://c.basemaps.cartocdn.com/dark_all/"
+    ),
+    "© OpenStreetMap contributors © CARTO"
+)
+
 /** Zoom à partir duquel les noms des monuments sont affichés sur la carte. */
 private const val LABEL_MIN_ZOOM = 16.0
 
@@ -197,21 +243,22 @@ private class LabelOverlay(
     monuments: List<Monument>,
     private val density: Float,
     scaledDensity: Float,
+    style: MapStyle,
     private val onTap: (Monument) -> Unit
 ) : Overlay() {
 
     private val ordered = monuments.sortedByDescending { it.important }
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 14f * scaledDensity // 14 sp : suit « Taille de police » du téléphone
-        color = Color.rgb(26, 41, 72) // bleu nuit du thème
+        color = style.labelText
         typeface = Typeface.DEFAULT_BOLD
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = style.labelFill
     }
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 151, 43) // or du thème
-        style = Paint.Style.STROKE
+        color = style.labelStroke
+        this.style = Paint.Style.STROKE
         strokeWidth = 2f * density
     }
     private val padding = 6f * density
@@ -308,21 +355,24 @@ private fun pinForCategory(category: String): Int = when (category) {
 }
 
 /**
- * Cercle géographique avec contour rouge en pointillés.
+ * Cercle géographique avec contour en pointillés (couleur d'accent du thème).
  * osmdroid n'expose pas de setter pour le paint du contour → on configure
  * le champ protégé [PolyOverlayWithIW.mOutlinePaint] depuis une sous-classe.
  */
 private class WalkCircle(
     map: MapView,
     center: GeoPoint,
-    radiusMeters: Double
+    radiusMeters: Double,
+    color: Int
 ) : Polygon(map) {
 
     init {
         points = pointsAsCircle(center, radiusMeters)
-        setStrokeColor(Color.RED)
+        setStrokeColor(color)
         setStrokeWidth(4f)
-        setFillColor(Color.argb(18, 255, 0, 0))
+        setFillColor(
+            Color.argb(18, Color.red(color), Color.green(color), Color.blue(color))
+        )
         mOutlinePaint?.let { paint ->
             paint.style = Paint.Style.STROKE
             paint.pathEffect = DashPathEffect(floatArrayOf(14f, 12f), 0f)
